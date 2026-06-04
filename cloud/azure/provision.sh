@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEMPLATE_FILE="${SCRIPT_DIR}/azuredeploy.json"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SETUP_SCRIPT="${REPO_ROOT}/os/ubuntu/setup-vpn.sh"
 
 LOCATION="${LOCATION:-}"
 LOCATION_DISPLAY_NAME="${LOCATION_DISPLAY_NAME:-}"
@@ -17,6 +18,8 @@ PUBLIC_IP_NAME="${PUBLIC_IP_NAME:-vpn-public-ip}"
 NETWORK_SECURITY_GROUP_NAME="${NETWORK_SECURITY_GROUP_NAME:-vpn-nsg}"
 WG_PORT="${WG_PORT:-51820}"
 ADMIN_USER="${ADMIN_USER:-}"
+VM_IMAGE="${VM_IMAGE:-Ubuntu2404}"
+SSH_SOURCE_PREFIX="${SSH_SOURCE_PREFIX:-*}"
 
 echo_info() {
     echo "[Azure INFO] $1"
@@ -41,10 +44,6 @@ check_azure_login() {
     if ! az account show &> /dev/null; then
         echo_error "Not logged in to Azure. Please run 'az login' first."
     fi
-}
-
-json_escape() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\r/\\r/g; s/\t/\\t/g'
 }
 
 select_continent() {
@@ -168,83 +167,170 @@ prompt_admin_password() {
     done
 }
 
-write_parameters_file() {
-    local params_file="$1"
-
-    cat > "$params_file" <<EOF
-{
-  "resourceGroupName": { "value": "$(json_escape "$RESOURCE_GROUP_NAME")" },
-  "location": { "value": "$(json_escape "$LOCATION")" },
-  "vmSize": { "value": "$(json_escape "$VM_SIZE")" },
-  "vmName": { "value": "$(json_escape "$VM_NAME")" },
-  "networkName": { "value": "$(json_escape "$NETWORK_NAME")" },
-  "subnetName": { "value": "$(json_escape "$SUBNET_NAME")" },
-  "publicIpName": { "value": "$(json_escape "$PUBLIC_IP_NAME")" },
-  "networkSecurityGroupName": { "value": "$(json_escape "$NETWORK_SECURITY_GROUP_NAME")" },
-  "adminUsername": { "value": "$(json_escape "$ADMIN_USER")" },
-  "adminPassword": { "value": "$(json_escape "$ADMIN_PASSWORD")" },
-  "diskSizeGb": { "value": $DISK_SIZE_GB },
-  "diskType": { "value": "$(json_escape "$DISK_TYPE")" },
-  "wgPort": { "value": "$(json_escape "$WG_PORT")" }
+shell_single_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\"'\"'/g")"
 }
-EOF
+
+write_run_command_script() {
+    local script_file="$1"
+
+    {
+        printf '#!/bin/bash\n'
+        printf 'set -euo pipefail\n'
+        printf 'export DEBIAN_FRONTEND=noninteractive\n'
+        printf 'export ADMIN_USER=%s\n' "$(shell_single_quote "$ADMIN_USER")"
+        printf 'export ADMIN_PASSWORD=%s\n' "$(shell_single_quote "$ADMIN_PASSWORD")"
+        printf '\n'
+        cat "$SETUP_SCRIPT"
+    } > "$script_file"
 }
 
 main() {
-    local params_file deployment_name public_ip
+    local bootstrap_script public_ip client_config
 
     echo "======================================================================"
-    echo "Azure ARM Deployment for WireGuard VPN"
+    echo "Azure CLI Deployment for WireGuard VPN"
     echo "======================================================================"
 
     check_azure_cli
     check_azure_login
 
-    if [ ! -f "$TEMPLATE_FILE" ]; then
-        echo_error "ARM template not found at: $TEMPLATE_FILE"
+    if [ ! -f "$SETUP_SCRIPT" ]; then
+        echo_error "Setup script not found at: $SETUP_SCRIPT"
     fi
 
     select_location
     generate_admin_user
     prompt_admin_password
 
-    params_file="$(mktemp)"
-    deployment_name="${RESOURCE_GROUP_NAME}-$(date +%Y%m%d%H%M%S)"
+    bootstrap_script="$(mktemp)"
+    trap 'rm -f "$bootstrap_script"' EXIT
+    write_run_command_script "$bootstrap_script"
 
-    trap 'rm -f "$params_file"' EXIT
-    write_parameters_file "$params_file"
-
-    echo_info "Simulating subscription deployment with az deployment sub what-if..."
-    if ! az deployment sub what-if \
-        --name "${deployment_name}-whatif" \
+    echo_info "Creating resource group..."
+    az group create \
+        --name "$RESOURCE_GROUP_NAME" \
         --location "$LOCATION" \
-        --template-file "$TEMPLATE_FILE" \
-        --parameters @"$params_file" \
-        --result-format FullResourcePayloads \
-        --no-pretty-print; then
-        echo_error "Deployment simulation failed; nothing has been deployed."
-    fi
+        --output none
 
-    echo_info "Simulation passed. Deploying resources..."
-    public_ip=$(az deployment sub create \
-        --name "$deployment_name" \
-        --location "$LOCATION" \
-        --template-file "$TEMPLATE_FILE" \
-        --parameters @"$params_file" \
-        --query "properties.outputs.publicIpAddress.value" \
+    echo_info "Creating virtual network and subnet..."
+    az network vnet create \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --name "$NETWORK_NAME" \
+        --address-prefixes 10.0.0.0/16 \
+        --subnet-name "$SUBNET_NAME" \
+        --subnet-prefixes 10.0.0.0/24 \
+        --output none
+
+    echo_info "Creating public IP..."
+    az network public-ip create \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --name "$PUBLIC_IP_NAME" \
+        --sku Standard \
+        --allocation-method Static \
+        --version IPv4 \
+        --output none
+
+    echo_info "Creating network security group..."
+    az network nsg create \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --name "$NETWORK_SECURITY_GROUP_NAME" \
+        --output none
+
+    echo_info "Allowing SSH, WireGuard and ICMP..."
+    az network nsg rule create \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
+        --name AllowSSH \
+        --priority 100 \
+        --access Allow \
+        --direction Inbound \
+        --protocol Tcp \
+        --source-address-prefixes "$SSH_SOURCE_PREFIX" \
+        --source-port-ranges '*' \
+        --destination-address-prefixes '*' \
+        --destination-port-ranges 22 \
+        --output none
+
+    az network nsg rule create \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
+        --name AllowWireGuard \
+        --priority 110 \
+        --access Allow \
+        --direction Inbound \
+        --protocol Udp \
+        --source-address-prefixes '*' \
+        --source-port-ranges '*' \
+        --destination-address-prefixes '*' \
+        --destination-port-ranges "$WG_PORT" \
+        --output none
+
+    az network nsg rule create \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
+        --name AllowICMP \
+        --priority 120 \
+        --access Allow \
+        --direction Inbound \
+        --protocol Icmp \
+        --source-address-prefixes '*' \
+        --source-port-ranges '*' \
+        --destination-address-prefixes '*' \
+        --destination-port-ranges '*' \
+        --output none
+
+    echo_info "Creating network interface..."
+    az network nic create \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --name "${VM_NAME}-nic" \
+        --vnet-name "$NETWORK_NAME" \
+        --subnet "$SUBNET_NAME" \
+        --network-security-group "$NETWORK_SECURITY_GROUP_NAME" \
+        --public-ip-address "$PUBLIC_IP_NAME" \
+        --output none
+
+    echo_info "Creating virtual machine..."
+    az vm create \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --name "$VM_NAME" \
+        --image "$VM_IMAGE" \
+        --size "$VM_SIZE" \
+        --admin-username "$ADMIN_USER" \
+        --admin-password "$ADMIN_PASSWORD" \
+        --authentication-type password \
+        --nics "${VM_NAME}-nic" \
+        --os-disk-size-gb "$DISK_SIZE_GB" \
+        --storage-sku "$DISK_TYPE" \
+        --output none
+
+    public_ip=$(az network public-ip show \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --name "$PUBLIC_IP_NAME" \
+        --query ipAddress \
         --output tsv)
 
-    if [ -z "$public_ip" ]; then
-        public_ip=$(az network public-ip show \
-            --name "$PUBLIC_IP_NAME" \
-            --resource-group "$RESOURCE_GROUP_NAME" \
-            --query ipAddress \
-            --output tsv)
-    fi
+    echo_info "Running os/ubuntu/setup-vpn.sh through Run Command..."
+    az vm run-command invoke \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --name "$VM_NAME" \
+        --command-id RunShellScript \
+        --scripts @"$bootstrap_script" \
+        --query "value[0].message" \
+        --output tsv
+
+    echo_info "Retrieving client configuration..."
+    client_config=$(az vm run-command invoke \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --name "$VM_NAME" \
+        --command-id RunShellScript \
+        --scripts "cat /etc/wireguard/clients/client.conf" \
+        --query "value[0].message" \
+        --output tsv)
 
     echo ""
     echo "======================================================================"
-    echo "Azure ARM Deployment Complete!"
+    echo "Azure CLI Deployment Complete!"
     echo "======================================================================"
     echo ""
     echo "VM Details:"
@@ -268,21 +354,14 @@ main() {
     echo "    /etc/wireguard/clients/client_privatekey"
     echo "    /etc/wireguard/clients/client_publickey"
     echo ""
-    echo_info "Retrieving client config from the VM..."
-    az vm run-command invoke \
-        --resource-group "$RESOURCE_GROUP_NAME" \
-        --name "$VM_NAME" \
-        --command-id RunShellScript \
-        --scripts "for i in \$(seq 1 60); do if [ -f /tmp/vpn-setup-complete ] && [ -f /etc/wireguard/clients/client.conf ]; then cat /etc/wireguard/clients/client.conf; exit 0; fi; sleep 5; done; echo 'client config not ready yet' >&2; exit 1" \
-        --query "value[0].message" \
-        --output tsv
+    echo "Client config:"
+    printf '%s\n' "$client_config"
     echo ""
+    echo "SSH:"
+    echo "  SSH stays enabled and is allowed by the VM firewall and NSG on port 22."
     echo ""
     echo "To terminate the deployment:"
-    echo "  az deployment sub delete --name $deployment_name"
     echo "  az group delete --name $RESOURCE_GROUP_NAME --yes --no-wait"
-    echo ""
-    echo "Note: This deployment uses a standard on-demand VM."
     echo "======================================================================"
 }
 

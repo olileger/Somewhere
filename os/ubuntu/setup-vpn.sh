@@ -95,7 +95,7 @@ get_admin_user
 echo_info "Updating package index and installing WireGuard..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends wireguard-tools iptables iptables-persistent curl sudo
+apt-get install -y --no-install-recommends wireguard-tools iptables iptables-persistent curl sudo openssh-server
 
 if ! modprobe wireguard 2>/dev/null; then
     echo_warn "WireGuard kernel module not available; the image/kernel may already provide it."
@@ -174,6 +174,8 @@ iptables -A INPUT -i lo -j ACCEPT
 ip6tables -A INPUT -i lo -j ACCEPT
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
 iptables -A INPUT -p udp --dport "${WG_PORT}" -j ACCEPT
 ip6tables -A INPUT -p udp --dport "${WG_PORT}" -j ACCEPT
 iptables -A INPUT -p icmp -j ACCEPT
@@ -183,10 +185,7 @@ iptables-save > /etc/iptables/rules.v4
 ip6tables-save > /etc/iptables/rules.v6
 netfilter-persistent save
 systemctl enable netfilter-persistent
-
-echo_info "Disabling SSH for security..."
-systemctl disable --now ssh 2>/dev/null || true
-apt-get purge -y openssh-server 2>/dev/null || true
+systemctl enable --now ssh
 
 echo_info "Configuring WireGuard to start on boot..."
 systemctl enable "wg-quick@${WG_INTERFACE}"
@@ -217,10 +216,6 @@ echo "======================================================================"
 echo "WireGuard VPN Server Setup Complete!"
 echo "======================================================================"
 echo ""
-echo "Admin credentials (save these!):"
-echo "  Username: ${ADMIN_USER}"
-echo "  Password: ${ADMIN_PASSWORD}"
-echo ""
 echo "Client config files:"
 echo "  - ${CLIENT_CONFIG_FILE}"
 echo "  - ${CLIENT_PRIVATE_KEY_FILE}"
@@ -230,7 +225,7 @@ echo "Server public IP: ${SERVER_PUBLIC_IP}"
 echo "WireGuard port: ${WG_PORT}"
 echo ""
 echo "Security notes:"
-echo "  - SSH is DISABLED (only WireGuard port ${WG_PORT}/udp is open)"
+echo "  - SSH is ENABLED and allowed on port 22"
 echo "  - IP forwarding is enabled"
 echo "  - Firewall rules are persistent"
 echo "  - WireGuard will start automatically on boot"
