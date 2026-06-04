@@ -188,7 +188,7 @@ fi
 echo_info "Encoding setup script and credentials..."
 
 # Read the setup script
-SETUP_SCRIPT_PATH="../../../os/alpine/setup-vpn.sh"
+SETUP_SCRIPT_PATH="../../os/alpine/setup-vpn.sh"
 if [ ! -f "$SETUP_SCRIPT_PATH" ]; then
     echo_error "Setup script not found at: $SETUP_SCRIPT_PATH"
 fi

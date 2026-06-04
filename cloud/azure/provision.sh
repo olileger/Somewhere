@@ -241,7 +241,7 @@ echo_info "Network interface created."
 echo_info "Preparing cloud-init configuration..."
 
 # Read the setup script
-SETUP_SCRIPT_PATH="../../../os/alpine/setup-vpn.sh"
+SETUP_SCRIPT_PATH="../../os/alpine/setup-vpn.sh"
 if [ ! -f "$SETUP_SCRIPT_PATH" ]; then
     echo_error "Setup script not found at: $SETUP_SCRIPT_PATH"
 fi

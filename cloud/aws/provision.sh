@@ -189,7 +189,7 @@ echo_info "Found Alpine AMI: $ALPINE_AMI"
 echo_info "Preparing user data..."
 
 # Read the setup script
-SETUP_SCRIPT_PATH="../../../os/alpine/setup-vpn.sh"
+SETUP_SCRIPT_PATH="../../os/alpine/setup-vpn.sh"
 if [ ! -f "$SETUP_SCRIPT_PATH" ]; then
     echo_error "Setup script not found at: $SETUP_SCRIPT_PATH"
 fi
