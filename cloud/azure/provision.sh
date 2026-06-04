@@ -19,7 +19,6 @@ NETWORK_SECURITY_GROUP_NAME="${NETWORK_SECURITY_GROUP_NAME:-vpn-nsg}"
 WG_PORT="${WG_PORT:-51820}"
 ADMIN_USER="${ADMIN_USER:-}"
 VM_IMAGE="${VM_IMAGE:-Ubuntu2404}"
-SSH_SOURCE_PREFIX="${SSH_SOURCE_PREFIX:-*}"
 
 echo_info() {
     echo "[Azure INFO] $1"
@@ -237,21 +236,7 @@ main() {
         --name "$NETWORK_SECURITY_GROUP_NAME" \
         --output none
 
-    echo_info "Allowing SSH, WireGuard and ICMP..."
-    az network nsg rule create \
-        --resource-group "$RESOURCE_GROUP_NAME" \
-        --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
-        --name AllowSSH \
-        --priority 100 \
-        --access Allow \
-        --direction Inbound \
-        --protocol Tcp \
-        --source-address-prefixes "$SSH_SOURCE_PREFIX" \
-        --source-port-ranges '*' \
-        --destination-address-prefixes '*' \
-        --destination-port-ranges 22 \
-        --output none
-
+    echo_info "Allowing WireGuard and ICMP; SSH remains blocked at the NSG"
     az network nsg rule create \
         --resource-group "$RESOURCE_GROUP_NAME" \
         --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
@@ -358,7 +343,7 @@ main() {
     printf '%s\n' "$client_config"
     echo ""
     echo "SSH:"
-    echo "  SSH stays enabled and is allowed by the VM firewall and NSG on port 22."
+    echo "  SSH stays enabled in the VM firewall, but remains blocked by the NSG on port 22."
     echo ""
     echo "To terminate the deployment:"
     echo "  az group delete --name $RESOURCE_GROUP_NAME --yes --no-wait"
