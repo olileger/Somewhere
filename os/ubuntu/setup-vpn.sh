@@ -76,17 +76,11 @@ get_admin_user() {
 }
 
 get_public_ip() {
-    local server_public_ip=""
-
-    if curl -s -m 2 http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress -H "Metadata:true" 2>/dev/null | grep -q '.'; then
-        server_public_ip=$(curl -s http://169.254.169.254/metadata/instance/network/interface/0/ipv4/ipAddress/0/publicIpAddress -H "Metadata:true")
+    if [ -z "${SERVER_PUBLIC_IP:-}" ]; then
+        echo_error "SERVER_PUBLIC_IP is required."
     fi
 
-    if [ -z "$server_public_ip" ]; then
-        server_public_ip="YOUR_SERVER_IP"
-    fi
-
-    echo "$server_public_ip"
+    echo "$SERVER_PUBLIC_IP"
 }
 
 get_credentials "$@"

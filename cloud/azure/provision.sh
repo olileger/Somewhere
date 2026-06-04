@@ -172,6 +172,7 @@ shell_single_quote() {
 
 write_run_command_script() {
     local script_file="$1"
+    local server_public_ip="$2"
 
     {
         printf '#!/bin/bash\n'
@@ -179,6 +180,7 @@ write_run_command_script() {
         printf 'export DEBIAN_FRONTEND=noninteractive\n'
         printf 'export ADMIN_USER=%s\n' "$(shell_single_quote "$ADMIN_USER")"
         printf 'export ADMIN_PASSWORD=%s\n' "$(shell_single_quote "$ADMIN_PASSWORD")"
+        printf 'export SERVER_PUBLIC_IP=%s\n' "$(shell_single_quote "$server_public_ip")"
         printf '\n'
         cat "$SETUP_SCRIPT"
     } > "$script_file"
@@ -204,7 +206,7 @@ main() {
 
     bootstrap_script="$(mktemp)"
     trap 'rm -f "$bootstrap_script"' EXIT
-    write_run_command_script "$bootstrap_script"
+    write_run_command_script "$bootstrap_script" "$public_ip"
 
     echo_info "Creating resource group..."
     az group create \
