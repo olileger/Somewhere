@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # =============================================================================
-# Azure Spot VM Provisioning for Alpine WireGuard VPN
+# Azure Spot VM Provisioning for Ubuntu Minimal WireGuard VPN
 # =============================================================================
-# This script provisions a minimal Spot VM on Azure with Alpine Linux
+# This script provisions a minimal Spot VM on Azure with Ubuntu Minimal
 # and configures it as a WireGuard VPN server.
 #
 # Requirements:
@@ -17,13 +17,13 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-LOCATION="francecentral"  # Change to your preferred region
+LOCATION="francecentral"
 VM_SIZE="Standard_B1ls"  # ARM-based, cheapest option (512MB RAM, 1 vCPU)
 # Alternative x86 options: Standard_B1s (1 vCPU, 1GB RAM)
 DISK_SIZE_GB="32"  # S4 = 32 GiB Standard HDD
 DISK_TYPE="Standard_LRS"  # Managed Standard HDD (valid az vm create storage SKU)
 RESOURCE_GROUP_NAME="somewhere"
-VM_NAME="wireguard-vpn-alpine"
+VM_NAME="wireguard-vpn-ubuntu-minimal"
 NETWORK_NAME="vpn-vnet"
 SUBNET_NAME="vpn-subnet"
 PUBLIC_IP_NAME="vpn-public-ip"
@@ -66,6 +66,35 @@ check_jq() {
     if ! command -v jq &> /dev/null; then
         echo_error "jq is not installed. Please install it (sudo apt install jq / brew install jq)."
     fi
+}
+
+find_ubuntu_image() {
+    local candidates=(
+        "Canonical:0001-com-ubuntu-minimal-jammy:minimal-22_04-lts-gen2"
+        "Canonical:0001-com-ubuntu-minimal-noble:minimal-24_04-lts-gen2"
+    )
+    local candidate publisher offer sku image
+
+    for candidate in "${candidates[@]}"; do
+        IFS=':' read -r publisher offer sku <<< "$candidate"
+        echo_info "Checking Ubuntu Minimal image availability in $LOCATION ($offer/$sku)..."
+
+        image=$(az vm image list \
+            --location "$LOCATION" \
+            --publisher "$publisher" \
+            --offer "$offer" \
+            --sku "$sku" \
+            --all \
+            --output json 2>/dev/null \
+            | jq -r 'sort_by(.version) | last | .urn // empty')
+
+        if [ -n "$image" ]; then
+            UBUNTU_IMAGE="$image"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 generate_admin_user() {
@@ -241,7 +270,7 @@ echo_info "Network interface created."
 echo_info "Preparing cloud-init configuration..."
 
 # Read the setup script
-SETUP_SCRIPT_PATH="../../os/alpine/setup-vpn.sh"
+SETUP_SCRIPT_PATH="../../os/ubuntu/setup-vpn.sh"
 if [ ! -f "$SETUP_SCRIPT_PATH" ]; then
     echo_error "Setup script not found at: $SETUP_SCRIPT_PATH"
 fi
@@ -257,32 +286,13 @@ ADMIN_PASSWORD_B64=$(echo -n "$ADMIN_PASSWORD" | base64 -w0 2>/dev/null || echo 
 
 echo_info "Launching Spot VM..."
 
-# Find Alpine Linux image
-ALPINE_IMAGE=$(az vm image list \
-    --location "$LOCATION" \
-    --publisher "alpine" \
-    --offer "alpine" \
-    --sku "3-18" \
-    --query "[0].urn" \
-    --output tsv 2>/dev/null)
-
-if [ -z "$ALPINE_IMAGE" ]; then
-    # Try without specific version
-    ALPINE_IMAGE=$(az vm image list \
-        --location "$LOCATION" \
-        --publisher "alpine" \
-        --offer "alpine" \
-        --query "[0].urn" \
-        --output tsv 2>/dev/null)
+if ! find_ubuntu_image; then
+    echo_error "Could not find a Ubuntu Minimal image in region $LOCATION."
+    echo_error "Try a different Azure location or run:"
+    echo_error "  az vm image list --location $LOCATION --publisher Canonical --offer 0001-com-ubuntu-minimal-jammy --sku minimal-22_04-lts-gen2 --all"
 fi
 
-if [ -z "$ALPINE_IMAGE" ]; then
-    echo_error "Could not find Alpine Linux image in region $LOCATION."
-    echo_error "Try a different location or check available images with:"
-    echo_error "  az vm image list --location $LOCATION --publisher alpine"
-fi
-
-echo_info "Using Alpine image: $ALPINE_IMAGE"
+echo_info "Using Ubuntu image: $UBUNTU_IMAGE"
 
 # Create cloud-init configuration
 CLOUD_INIT_CONFIG=$(cat <<EOF
@@ -313,7 +323,7 @@ VM_ID=$(az vm create \
     --name "$VM_NAME" \
     --resource-group "$RESOURCE_GROUP_NAME" \
     --location "$LOCATION" \
-    --image "$ALPINE_IMAGE" \
+    --image "$UBUNTU_IMAGE" \
     --size "$VM_SIZE" \
     --admin-username "$ADMIN_USER" \
     --admin-password "$ADMIN_PASSWORD" \
