@@ -24,7 +24,7 @@ VOLUME_SIZE="5"  # 5GB (minimum for Alpine + WireGuard)
 VOLUME_TYPE="gp2"  # gp2 is usually cheapest for small volumes
 ADMIN_USER=""
 KEY_NAME="vpn-key-${USER}"  # SSH key name (will be created if not exists)
-SECURITY_GROUP_NAME="vpn-wg-sg-${USER}"
+SECURITY_GROUP_NAME="somewhere"
 INSTANCE_NAME="wireguard-vpn-alpine"
 TAG_NAME="WireGuardVPN"
 

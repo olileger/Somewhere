@@ -22,7 +22,7 @@ VM_SIZE="Standard_B1ls"  # ARM-based, cheapest option (512MB RAM, 1 vCPU)
 # Alternative x86 options: Standard_B1s (1 vCPU, 1GB RAM)
 DISK_SIZE_GB="32"  # S4 = 32 GiB Standard HDD
 DISK_TYPE="Standard_LRS"  # Managed Standard HDD (valid az vm create storage SKU)
-RESOURCE_GROUP_NAME="vpn-rg-${USER}"
+RESOURCE_GROUP_NAME="somewhere"
 VM_NAME="wireguard-vpn-alpine"
 NETWORK_NAME="vpn-vnet"
 SUBNET_NAME="vpn-subnet"

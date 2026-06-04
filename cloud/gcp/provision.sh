@@ -25,7 +25,7 @@ DISK_SIZE="10"  # 10GB pd-standard (minimum practical size)
 DISK_TYPE="pd-standard"  # HDD, cheapest option
 # Alternative: pd-balanced (SSD) - sometimes cheaper for small sizes
 INSTANCE_NAME="wireguard-vpn-alpine"
-FIREWALL_RULE_NAME="allow-wireguard-${USER}"
+FIREWALL_RULE_NAME="somewhere"
 NETWORK_NAME="default"  # Use default network for simplicity
 SUBNETWORK_NAME="default"
 ADMIN_USER=""
