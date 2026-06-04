@@ -204,10 +204,6 @@ main() {
     generate_admin_user
     prompt_admin_password
 
-    bootstrap_script="$(mktemp)"
-    trap 'rm -f "$bootstrap_script"' EXIT
-    write_run_command_script "$bootstrap_script" "$public_ip"
-
     echo_info "Creating resource group..."
     az group create \
         --name "$RESOURCE_GROUP_NAME" \
@@ -296,6 +292,10 @@ main() {
         --name "$PUBLIC_IP_NAME" \
         --query ipAddress \
         --output tsv)
+
+    bootstrap_script="$(mktemp)"
+    trap 'rm -f "$bootstrap_script"' EXIT
+    write_run_command_script "$bootstrap_script" "$public_ip"
 
     echo_info "Running os/ubuntu/setup-vpn.sh through Run Command..."
     az vm run-command invoke \
