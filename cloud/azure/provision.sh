@@ -234,7 +234,7 @@ main() {
         --name "$NETWORK_SECURITY_GROUP_NAME" \
         --output none
 
-    echo_info "Allowing WireGuard and ICMP; SSH remains blocked at the NSG"
+    echo_info "Allowing WireGuard; SSH remains blocked at the NSG"
     az network nsg rule create \
         --resource-group "$RESOURCE_GROUP_NAME" \
         --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
@@ -247,20 +247,6 @@ main() {
         --source-port-ranges '*' \
         --destination-address-prefixes '*' \
         --destination-port-ranges "$WG_PORT" \
-        --output none
-
-    az network nsg rule create \
-        --resource-group "$RESOURCE_GROUP_NAME" \
-        --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
-        --name AllowICMP \
-        --priority 120 \
-        --access Allow \
-        --direction Inbound \
-        --protocol Icmp \
-        --source-address-prefixes '*' \
-        --source-port-ranges '*' \
-        --destination-address-prefixes '*' \
-        --destination-port-ranges '*' \
         --output none
 
     echo_info "Creating network interface..."
