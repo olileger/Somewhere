@@ -111,6 +111,7 @@ generate_admin_user() {
 echo "======================================================================"
 echo "Azure Spot VM Provisioning for WireGuard VPN"
 echo "======================================================================"
+echo "The password length must be between 12 and 72. Password must have the 3 of the following: 1 lower case character, 1 upper case character, 1 number and 1 special character."
 
 generate_admin_user
 
