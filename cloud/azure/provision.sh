@@ -17,18 +17,18 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-LOCATION="eastus"  # Change to your preferred region
+LOCATION="francecentral"  # Change to your preferred region
 VM_SIZE="Standard_B1ls"  # ARM-based, cheapest option (512MB RAM, 1 vCPU)
 # Alternative x86 options: Standard_B1s (1 vCPU, 1GB RAM)
-DISK_SIZE_GB="5"  # 5GB (minimum for Alpine + WireGuard)
-DISK_TYPE="Standard_LRS"  # HDD, cheapest option
+DISK_SIZE_GB="32"  # S4 = 32 GiB Standard HDD
+DISK_TYPE="Standard_LRS"  # Managed Standard HDD (valid az vm create storage SKU)
 RESOURCE_GROUP_NAME="vpn-rg-${USER}"
 VM_NAME="wireguard-vpn-alpine"
 NETWORK_NAME="vpn-vnet"
 SUBNET_NAME="vpn-subnet"
 PUBLIC_IP_NAME="vpn-public-ip"
 NETWORK_SECURITY_GROUP_NAME="vpn-nsg"
-ADMIN_USER="azureadmin"
+ADMIN_USER=""
 
 # WireGuard port
 WG_PORT="51820"
@@ -68,6 +68,13 @@ check_jq() {
     fi
 }
 
+generate_admin_user() {
+    ADMIN_USER=$(LC_ALL=C tr -dc 'a-z' </dev/urandom | head -c 12 || true)
+    if [ "${#ADMIN_USER}" -ne 12 ]; then
+        echo_error "Failed to generate admin username."
+    fi
+}
+
 # -----------------------------------------------------------------------------
 # Get credentials
 # -----------------------------------------------------------------------------
@@ -75,6 +82,8 @@ check_jq() {
 echo "======================================================================"
 echo "Azure Spot VM Provisioning for WireGuard VPN"
 echo "======================================================================"
+
+generate_admin_user
 
 while true; do
     read -r -s -p "Enter admin/sudo password for the VM: " ADMIN_PASSWORD
@@ -94,23 +103,6 @@ while true; do
         else
             echo_error "Passwords do not match."
         fi
-    fi
-    echo_error "Password cannot be empty."
-done
-
-while true; do
-    read -r -p "Enter client username for VPN connection: " CLIENT_USERNAME
-    if [ -n "$CLIENT_USERNAME" ]; then
-        break
-    fi
-    echo_error "Username cannot be empty."
-done
-
-while true; do
-    read -r -s -p "Enter client password for VPN connection: " CLIENT_PASSWORD
-    echo
-    if [ -n "$CLIENT_PASSWORD" ]; then
-        break
     fi
     echo_error "Password cannot be empty."
 done
@@ -259,9 +251,6 @@ SETUP_SCRIPT_BASE64=$(base64 -w0 "$SETUP_SCRIPT_PATH" 2>/dev/null || base64 "$SE
 
 # Encode credentials to base64
 ADMIN_PASSWORD_B64=$(echo -n "$ADMIN_PASSWORD" | base64 -w0 2>/dev/null || echo -n "$ADMIN_PASSWORD" | base64 | tr -d '\n')
-CLIENT_USERNAME_B64=$(echo -n "$CLIENT_USERNAME" | base64 -w0 2>/dev/null || echo -n "$CLIENT_USERNAME" | base64 | tr -d '\n')
-CLIENT_PASSWORD_B64=$(echo -n "$CLIENT_PASSWORD" | base64 -w0 2>/dev/null || echo -n "$CLIENT_PASSWORD" | base64 | tr -d '\n')
-
 # -----------------------------------------------------------------------------
 # Step 7: Create the VM (Spot)
 # -----------------------------------------------------------------------------
@@ -308,9 +297,8 @@ runcmd:
     echo "$SETUP_SCRIPT_BASE64" | base64 -d > /tmp/setup-vpn.sh
     chmod +x /tmp/setup-vpn.sh
     # Set credentials as environment variables
+    export ADMIN_USER="$ADMIN_USER"
     export ADMIN_PASSWORD=$(echo "$ADMIN_PASSWORD_B64" | base64 -d)
-    export CLIENT_USERNAME=$(echo "$CLIENT_USERNAME_B64" | base64 -d)
-    export CLIENT_PASSWORD=$(echo "$CLIENT_PASSWORD_B64" | base64 -d)
     # Run setup
     /tmp/setup-vpn.sh
     rm /tmp/setup-vpn.sh
@@ -369,8 +357,6 @@ echo ""
 echo "Credentials (save these!):"
 echo "  Admin Username: $ADMIN_USER"
 echo "  Admin Password: [the password you entered]"
-echo "  Client Username: $CLIENT_USERNAME"
-echo "  Client Password: [the password you entered]"
 echo ""
 echo "WireGuard Configuration:"
 echo "  Port: ${WG_PORT}/udp"
@@ -378,8 +364,9 @@ echo "  Endpoint: ${PUBLIC_IP}:${WG_PORT}"
 echo ""
 echo "Client Configuration:"
 echo "  The client config file is generated on the server at:"
-echo "    /etc/wireguard/clients/${CLIENT_USERNAME}.conf"
-echo "    /etc/wireguard/clients/${CLIENT_USERNAME}-full.conf (with credentials)"
+echo "    /etc/wireguard/clients/client.conf"
+echo "    /etc/wireguard/clients/client_privatekey"
+echo "    /etc/wireguard/clients/client_publickey"
 echo ""
 echo "  To retrieve the client config file:"
 echo "    1. Temporarily enable SSH in the NSG:"
@@ -391,7 +378,7 @@ echo "         --protocol Tcp --direction Inbound \\"
 echo "         --priority 300 --source-address-prefixes YOUR_IP \\"
 echo "         --destination-port-ranges 22 --access Allow"
 echo "    2. SSH to the instance: ssh ${ADMIN_USER}@${PUBLIC_IP}"
-echo "    3. Get the config: cat /etc/wireguard/clients/${CLIENT_USERNAME}-full.conf"
+echo "    3. Get the config: cat /etc/wireguard/clients/client.conf"
 echo "    4. Remove SSH access:"
 echo "       az network nsg rule delete \\"
 echo "         --name AllowSSH \\"
@@ -403,7 +390,7 @@ echo "  az serial-console connect --name $VM_NAME --resource-group $RESOURCE_GRO
 echo ""
 echo "Cost Estimate:"
 echo "  VM (Spot B1ls): ~\$0.0003-\$0.001/hour (varies by region)"
-echo "  Disk (5GB Standard_LRS): ~\$0.50/month"
+echo "  Disk (32GB Standard_LRS): ~\$1/month"
 echo "  Public IP: Free (while attached to running VM)"
 echo ""
 echo "To terminate the VM:"

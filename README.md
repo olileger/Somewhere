@@ -1,2 +1,2 @@
 # Somewhere
-Somewhere is a serverless VPN (mostly a VPN into a Container...)
+Somewhere is a WireGuard VPN within a lightweight Linux VM.

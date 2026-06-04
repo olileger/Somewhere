@@ -17,11 +17,12 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-REGION="us-east-1"  # Change to your preferred region
+REGION="eu-west-3"  # Paris, equivalent to Azure France Central
 INSTANCE_TYPE="t4g.nano"  # ARM-based, cheapest option (512MB RAM)
 # Alternative x86 options if ARM not available: t3.micro (1GB RAM)
 VOLUME_SIZE="5"  # 5GB (minimum for Alpine + WireGuard)
 VOLUME_TYPE="gp2"  # gp2 is usually cheapest for small volumes
+ADMIN_USER=""
 KEY_NAME="vpn-key-${USER}"  # SSH key name (will be created if not exists)
 SECURITY_GROUP_NAME="vpn-wg-sg-${USER}"
 INSTANCE_NAME="wireguard-vpn-alpine"
@@ -58,6 +59,13 @@ check_jq() {
     fi
 }
 
+generate_admin_user() {
+    ADMIN_USER=$(LC_ALL=C tr -dc 'a-z' </dev/urandom | head -c 12 || true)
+    if [ "${#ADMIN_USER}" -ne 12 ]; then
+        echo_error "Failed to generate admin username."
+    fi
+}
+
 # -----------------------------------------------------------------------------
 # Get credentials
 # -----------------------------------------------------------------------------
@@ -65,6 +73,8 @@ check_jq() {
 echo "======================================================================"
 echo "AWS Spot Instance Provisioning for WireGuard VPN"
 echo "======================================================================"
+
+generate_admin_user
 
 while true; do
     read -r -s -p "Enter admin/sudo password for the VM: " ADMIN_PASSWORD
@@ -84,23 +94,6 @@ while true; do
         else
             echo_error "Passwords do not match."
         fi
-    fi
-    echo_error "Password cannot be empty."
-done
-
-while true; do
-    read -r -p "Enter client username for VPN connection: " CLIENT_USERNAME
-    if [ -n "$CLIENT_USERNAME" ]; then
-        break
-    fi
-    echo_error "Username cannot be empty."
-done
-
-while true; do
-    read -r -s -p "Enter client password for VPN connection: " CLIENT_PASSWORD
-    echo
-    if [ -n "$CLIENT_PASSWORD" ]; then
-        break
     fi
     echo_error "Password cannot be empty."
 done
@@ -206,8 +199,6 @@ SETUP_SCRIPT_BASE64=$(base64 -w0 "$SETUP_SCRIPT_PATH" 2>/dev/null || base64 "$SE
 
 # Encode credentials to base64
 ADMIN_PASSWORD_B64=$(echo -n "$ADMIN_PASSWORD" | base64 -w0 2>/dev/null || echo -n "$ADMIN_PASSWORD" | base64 | tr -d '\n')
-CLIENT_USERNAME_B64=$(echo -n "$CLIENT_USERNAME" | base64 -w0 2>/dev/null || echo -n "$CLIENT_USERNAME" | base64 | tr -d '\n')
-CLIENT_PASSWORD_B64=$(echo -n "$CLIENT_PASSWORD" | base64 -w0 2>/dev/null || echo -n "$CLIENT_PASSWORD" | base64 | tr -d '\n')
 
 # Create user data script
 USER_DATA=$(cat <<EOF
@@ -218,9 +209,8 @@ set -euo pipefail
 apk add --no-cache coreutils
 
 # Decode credentials
+export ADMIN_USER="$ADMIN_USER"
 export ADMIN_PASSWORD=$(echo "$ADMIN_PASSWORD_B64" | base64 -d)
-export CLIENT_USERNAME=$(echo "$CLIENT_USERNAME_B64" | base64 -d)
-export CLIENT_PASSWORD=$(echo "$CLIENT_PASSWORD_B64" | base64 -d)
 
 # Decode and run setup script
 echo "$SETUP_SCRIPT_BASE64" | base64 -d > /tmp/setup-vpn.sh
@@ -327,10 +317,8 @@ echo "  Private Key File: ${KEY_NAME}.pem"
 echo "  IMPORTANT: Keep this file secure!"
 echo ""
 echo "Credentials (save these!):"
-echo "  Admin Username: admin"
+echo "  Admin Username: $ADMIN_USER"
 echo "  Admin Password: [the password you entered]"
-echo "  Client Username: $CLIENT_USERNAME"
-echo "  Client Password: [the password you entered]"
 echo ""
 echo "WireGuard Configuration:"
 echo "  Port: ${WG_PORT}/udp"
@@ -338,16 +326,17 @@ echo "  Endpoint: ${PUBLIC_IP}:${WG_PORT}"
 echo ""
 echo "Client Configuration:"
 echo "  The client config file is generated on the server at:"
-echo "    /etc/wireguard/clients/${CLIENT_USERNAME}.conf"
-echo "    /etc/wireguard/clients/${CLIENT_USERNAME}-full.conf (with credentials)"
+echo "    /etc/wireguard/clients/client.conf"
+echo "    /etc/wireguard/clients/client_privatekey"
+echo "    /etc/wireguard/clients/client_publickey"
 echo ""
 echo "  To retrieve the client config file:"
 echo "    1. Temporarily add SSH access to the security group:"
 echo "       aws ec2 authorize-security-group-ingress \\"
 echo "         --group-id $SECURITY_GROUP_ID \\"
 echo "         --protocol tcp --port 22 --cidr YOUR_IP/32 --region $REGION"
-echo "    2. SSH to the instance: ssh -i ${KEY_NAME}.pem admin@${PUBLIC_IP}"
-echo "    3. Get the config: cat /etc/wireguard/clients/${CLIENT_USERNAME}-full.conf"
+echo "    2. SSH to the instance: ssh -i ${KEY_NAME}.pem ${ADMIN_USER}@${PUBLIC_IP}"
+echo "    3. Get the config: cat /etc/wireguard/clients/client.conf"
 echo "    4. Remove SSH access:"
 echo "       aws ec2 revoke-security-group-ingress \\"
 echo "         --group-id $SECURITY_GROUP_ID \\"

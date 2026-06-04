@@ -17,7 +17,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-REGION="us-central1"  # Change to your preferred region
+REGION="europe-west9"  # Paris, equivalent to Azure France Central
 ZONE="${REGION}-a"   # Availability zone
 MACHINE_TYPE="f1-micro"  # Cheapest option (1 vCPU, 600MB RAM)
 # Alternative: e2-micro (2 vCPU, 1GB RAM) - more available but slightly more expensive
@@ -28,7 +28,7 @@ INSTANCE_NAME="wireguard-vpn-alpine"
 FIREWALL_RULE_NAME="allow-wireguard-${USER}"
 NETWORK_NAME="default"  # Use default network for simplicity
 SUBNETWORK_NAME="default"
-ADMIN_USER="gcpadmin"
+ADMIN_USER=""
 
 # WireGuard port
 WG_PORT="51820"
@@ -69,6 +69,13 @@ check_gcloud_project() {
     fi
 }
 
+generate_admin_user() {
+    ADMIN_USER=$(LC_ALL=C tr -dc 'a-z' </dev/urandom | head -c 12 || true)
+    if [ "${#ADMIN_USER}" -ne 12 ]; then
+        echo_error "Failed to generate admin username."
+    fi
+}
+
 # -----------------------------------------------------------------------------
 # Get credentials
 # -----------------------------------------------------------------------------
@@ -76,6 +83,8 @@ check_gcloud_project() {
 echo "======================================================================"
 echo "GCP Preemptible VM Provisioning for WireGuard VPN"
 echo "======================================================================"
+
+generate_admin_user
 
 while true; do
     read -r -s -p "Enter admin/sudo password for the VM: " ADMIN_PASSWORD
@@ -95,23 +104,6 @@ while true; do
         else
             echo_error "Passwords do not match."
         fi
-    fi
-    echo_error "Password cannot be empty."
-done
-
-while true; do
-    read -r -p "Enter client username for VPN connection: " CLIENT_USERNAME
-    if [ -n "$CLIENT_USERNAME" ]; then
-        break
-    fi
-    echo_error "Username cannot be empty."
-done
-
-while true; do
-    read -r -s -p "Enter client password for VPN connection: " CLIENT_PASSWORD
-    echo
-    if [ -n "$CLIENT_PASSWORD" ]; then
-        break
     fi
     echo_error "Password cannot be empty."
 done
@@ -206,8 +198,6 @@ SETUP_SCRIPT_BASE64=$(base64 -w0 "$SETUP_SCRIPT_PATH" 2>/dev/null || base64 "$SE
 
 # Encode credentials to base64
 ADMIN_PASSWORD_B64=$(echo -n "$ADMIN_PASSWORD" | base64 -w0 2>/dev/null || echo -n "$ADMIN_PASSWORD" | base64 | tr -d '\n')
-CLIENT_USERNAME_B64=$(echo -n "$CLIENT_USERNAME" | base64 -w0 2>/dev/null || echo -n "$CLIENT_USERNAME" | base64 | tr -d '\n')
-CLIENT_PASSWORD_B64=$(echo -n "$CLIENT_PASSWORD" | base64 -w0 2>/dev/null || echo -n "$CLIENT_PASSWORD" | base64 | tr -d '\n')
 
 # -----------------------------------------------------------------------------
 # Step 4: Create the VM (Preemptible)
@@ -224,9 +214,8 @@ set -euo pipefail
 apk add --no-cache coreutils 2>/dev/null || true
 
 # Decode credentials
+export ADMIN_USER="$ADMIN_USER"
 export ADMIN_PASSWORD=$(echo "$ADMIN_PASSWORD_B64" | base64 -d)
-export CLIENT_USERNAME=$(echo "$CLIENT_USERNAME_B64" | base64 -d)
-export CLIENT_PASSWORD=$(echo "$CLIENT_PASSWORD_B64" | base64 -d)
 
 # Decode and run setup script
 echo "$SETUP_SCRIPT_BASE64" | base64 -d > /tmp/setup-vpn.sh
@@ -325,8 +314,6 @@ echo ""
 echo "Credentials (save these!):"
 echo "  Admin Username: $ADMIN_USER"
 echo "  Admin Password: [the password you entered]"
-echo "  Client Username: $CLIENT_USERNAME"
-echo "  Client Password: [the password you entered]"
 echo ""
 echo "WireGuard Configuration:"
 echo "  Port: ${WG_PORT}/udp"
@@ -334,8 +321,9 @@ echo "  Endpoint: ${CURRENT_IP}:${WG_PORT}"
 echo ""
 echo "Client Configuration:"
 echo "  The client config file is generated on the server at:"
-echo "    /etc/wireguard/clients/${CLIENT_USERNAME}.conf"
-echo "    /etc/wireguard/clients/${CLIENT_USERNAME}-full.conf (with credentials)"
+echo "    /etc/wireguard/clients/client.conf"
+echo "    /etc/wireguard/clients/client_privatekey"
+echo "    /etc/wireguard/clients/client_publickey"
 echo ""
 echo "  To retrieve the client config file:"
 echo "    1. Temporarily add a firewall rule for SSH (port 22):"
@@ -344,7 +332,7 @@ echo "         --allow=tcp:22 --source-ranges=YOUR_IP/32 \\"
 echo "         --target-tags=wireguard-vpn --network=$NETWORK_NAME"
 echo "    2. SSH to the instance using:"
 echo "       gcloud compute ssh $INSTANCE_NAME --zone $ZONE --username $ADMIN_USER"
-echo "    3. Get the config: cat /etc/wireguard/clients/${CLIENT_USERNAME}-full.conf"
+echo "    3. Get the config: cat /etc/wireguard/clients/client.conf"
 echo "    4. Remove SSH access:"
 echo "       gcloud compute firewall-rules delete allow-ssh-temp"
 echo ""
