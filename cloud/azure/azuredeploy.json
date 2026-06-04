@@ -277,16 +277,11 @@
                 "hardwareProfile": {
                   "vmSize": "[parameters('vmSize')]"
                 },
-                "priority": "Spot",
-                "evictionPolicy": "Deallocate",
-                "billingProfile": {
-                  "maxPrice": -1
-                },
                 "storageProfile": {
                   "imageReference": {
-                    "publisher": "Canonical",
-                    "offer": "0001-com-ubuntu-minimal-jammy",
-                    "sku": "minimal-22_04-lts-gen2",
+                    "publisher": "canonical",
+                    "offer": "ubuntu-24_04-lts",
+                    "sku": "minimal",
                     "version": "latest"
                   },
                   "osDisk": {
