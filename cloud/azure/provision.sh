@@ -111,7 +111,7 @@ select_location_for_continent() {
     fi
 
     echo_info "Available regions in $AZURE_GEOGRAPHY_GROUP:"
-    echo "$locations_json" | jq -r '.[] | "  - \(.displayName) [\(.name)]"'
+    echo "$locations_json" | jq -r 'to_entries[] | "  \(.key + 1)) \(.value.displayName) [\(.value.name)]"'
 
     while true; do
         read -r -p "Region number (1-$location_count): " choice
