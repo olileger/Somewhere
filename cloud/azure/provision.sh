@@ -17,7 +17,8 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-LOCATION="swedencentral"
+LOCATION="${LOCATION:-}"
+LOCATION_DISPLAY_NAME="${LOCATION_DISPLAY_NAME:-}"
 VM_SIZE="Standard_B1ls"  # ARM-based, cheapest option (512MB RAM, 1 vCPU)
 # Alternative x86 options: Standard_B1s (1 vCPU, 1GB RAM)
 DISK_SIZE_GB="32"  # S4 = 32 GiB Standard HDD
@@ -39,6 +40,10 @@ WG_PORT="51820"
 
 echo_info() {
     echo "[Azure INFO] $1"
+}
+
+echo_warning() {
+    echo "[Azure WARN] $1" >&2
 }
 
 echo_error() {
@@ -66,6 +71,88 @@ check_jq() {
     if ! command -v jq &> /dev/null; then
         echo_error "jq is not installed. Please install it (sudo apt install jq / brew install jq)."
     fi
+}
+
+select_continent() {
+    local choice
+
+    while true; do
+        echo "Select a continent:"
+        echo "  1) North America"
+        echo "  2) South America"
+        echo "  3) Europe"
+        echo "  4) Africa"
+        echo "  5) Asia"
+        echo "  6) Oceania"
+        read -r -p "Continent (1-6): " choice
+
+        case "$choice" in
+            1) AZURE_GEOGRAPHY_GROUP="North America"; return 0 ;;
+            2) AZURE_GEOGRAPHY_GROUP="South America"; return 0 ;;
+            3) AZURE_GEOGRAPHY_GROUP="Europe"; return 0 ;;
+            4) AZURE_GEOGRAPHY_GROUP="Africa"; return 0 ;;
+            5) AZURE_GEOGRAPHY_GROUP="Asia"; return 0 ;;
+            6) AZURE_GEOGRAPHY_GROUP="Oceania"; return 0 ;;
+            *) echo_warning "Please choose a number between 1 and 6." ;;
+        esac
+    done
+}
+
+select_location_for_continent() {
+    local locations_json location_count choice index
+
+    locations_json=$(az account list-locations \
+        --query "[?metadata.geographyGroup=='$AZURE_GEOGRAPHY_GROUP'] | sort_by(@, &displayName) | [].{displayName:displayName,name:name}" \
+        --output json)
+
+    location_count=$(echo "$locations_json" | jq 'length')
+    if [ "$location_count" -eq 0 ]; then
+        echo_error "No Azure regions found for continent: $AZURE_GEOGRAPHY_GROUP"
+    fi
+
+    echo_info "Available regions in $AZURE_GEOGRAPHY_GROUP:"
+    echo "$locations_json" | jq -r '.[] | "  - \(.displayName) [\(.name)]"'
+
+    while true; do
+        read -r -p "Region number (1-$location_count): " choice
+
+        case "$choice" in
+            ''|*[!0-9]*)
+                echo_warning "Please choose a valid number."
+                continue
+                ;;
+        esac
+
+        if [ "$choice" -ge 1 ] && [ "$choice" -le "$location_count" ]; then
+            index=$((choice - 1))
+            LOCATION_DISPLAY_NAME=$(echo "$locations_json" | jq -r --argjson index "$index" '.[$index].displayName')
+            LOCATION=$(echo "$locations_json" | jq -r --argjson index "$index" '.[$index].name')
+            return 0
+        fi
+
+        echo_warning "Please choose a number between 1 and $location_count."
+    done
+}
+
+resolve_location_display_name() {
+    LOCATION_DISPLAY_NAME=$(az account list-locations \
+        --query "[?name=='$LOCATION'] | [0].displayName" \
+        --output tsv)
+
+    if [ -z "$LOCATION_DISPLAY_NAME" ]; then
+        LOCATION_DISPLAY_NAME="$LOCATION"
+    fi
+}
+
+select_location() {
+    if [ -n "$LOCATION" ]; then
+        resolve_location_display_name
+        echo_info "Using preselected Azure region: $LOCATION_DISPLAY_NAME [$LOCATION]"
+        return 0
+    fi
+
+    select_continent
+    select_location_for_continent
 }
 
 find_ubuntu_image() {
@@ -115,6 +202,12 @@ echo "The password length must be between 12 and 72. Password must have the 3 of
 
 generate_admin_user
 
+check_azure_cli
+check_azure_login
+check_jq
+
+select_location
+
 while true; do
     read -r -s -p "Enter admin/sudo password for the VM: " ADMIN_PASSWORD
     echo
@@ -137,15 +230,7 @@ while true; do
     echo_error "Password cannot be empty."
 done
 
-# -----------------------------------------------------------------------------
-# Initialize
-# -----------------------------------------------------------------------------
-
-check_azure_cli
-check_azure_login
-check_jq
-
-# Set default location
+# Set selected location
 export AZURE_LOCATION="$LOCATION"
 
 # -----------------------------------------------------------------------------
@@ -361,7 +446,7 @@ echo ""
 echo "VM Details:"
 echo "  VM Name: $VM_NAME"
 echo "  Public IP: $PUBLIC_IP"
-echo "  Location: $LOCATION"
+echo "  Location: ${LOCATION_DISPLAY_NAME:-$LOCATION} ($LOCATION)"
 echo "  VM Size: $VM_SIZE (Spot)"
 echo "  Resource Group: $RESOURCE_GROUP_NAME"
 echo ""
