@@ -251,7 +251,7 @@ main() {
     echo "  VM Name: $VM_NAME"
     echo "  Public IP: $public_ip"
     echo "  Location: ${LOCATION_DISPLAY_NAME:-$LOCATION} ($LOCATION)"
-    echo "  VM Size: $VM_SIZE (Spot)"
+    echo "  VM Size: $VM_SIZE"
     echo "  Resource Group: $RESOURCE_GROUP_NAME"
     echo ""
     echo "Credentials (save these!):"
@@ -268,11 +268,21 @@ main() {
     echo "    /etc/wireguard/clients/client_privatekey"
     echo "    /etc/wireguard/clients/client_publickey"
     echo ""
+    echo_info "Retrieving client config from the VM..."
+    az vm run-command invoke \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --name "$VM_NAME" \
+        --command-id RunShellScript \
+        --scripts "for i in \$(seq 1 60); do if [ -f /tmp/vpn-setup-complete ] && [ -f /etc/wireguard/clients/client.conf ]; then cat /etc/wireguard/clients/client.conf; exit 0; fi; sleep 5; done; echo 'client config not ready yet' >&2; exit 1" \
+        --query "value[0].message" \
+        --output tsv
+    echo ""
+    echo ""
     echo "To terminate the deployment:"
     echo "  az deployment sub delete --name $deployment_name"
     echo "  az group delete --name $RESOURCE_GROUP_NAME --yes --no-wait"
     echo ""
-    echo "Note: Spot VMs may be evicted at any time by Azure."
+    echo "Note: This deployment uses a standard on-demand VM."
     echo "======================================================================"
 }
 
