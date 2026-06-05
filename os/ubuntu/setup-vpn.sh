@@ -14,6 +14,7 @@ WG_PRIVATE_KEY_FILE="${WG_CONFIG_DIR}/privatekey"
 WG_PUBLIC_KEY_FILE="${WG_CONFIG_DIR}/publickey"
 CLIENTS_DIR="${WG_CONFIG_DIR}/clients"
 ADMIN_USER="${ADMIN_USER:-}"
+WAN_INTERFACE=""
 
 echo_info() {
     echo "[INFO] $1"
@@ -83,8 +84,17 @@ get_public_ip() {
     echo "$SERVER_PUBLIC_IP"
 }
 
+get_wan_interface() {
+    WAN_INTERFACE=$(ip -o route show default 2>/dev/null | awk '{print $5; exit}')
+    if [ -z "$WAN_INTERFACE" ]; then
+        echo_warn "Could not detect default WAN interface; falling back to eth0."
+        WAN_INTERFACE="eth0"
+    fi
+}
+
 get_credentials "$@"
 get_admin_user
+get_wan_interface
 
 echo_info "Updating package index and installing WireGuard..."
 export DEBIAN_FRONTEND=noninteractive
@@ -129,13 +139,17 @@ PrivateKey = ${WG_SERVER_PRIVATE_KEY}
 Address = ${WG_SERVER_IP}/24
 ListenPort = ${WG_PORT}
 PostUp = iptables -A FORWARD -i ${WG_INTERFACE} -j ACCEPT; \
-          iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE; \
+          iptables -A FORWARD -i ${WAN_INTERFACE} -o ${WG_INTERFACE} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
+          iptables -t nat -A POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE; \
           ip6tables -A FORWARD -i ${WG_INTERFACE} -j ACCEPT; \
-          ip6tables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+          ip6tables -A FORWARD -i ${WAN_INTERFACE} -o ${WG_INTERFACE} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
+          ip6tables -t nat -A POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE
 PostDown = iptables -D FORWARD -i ${WG_INTERFACE} -j ACCEPT; \
-           iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE; \
+           iptables -D FORWARD -i ${WAN_INTERFACE} -o ${WG_INTERFACE} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
+           iptables -t nat -D POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE; \
            ip6tables -D FORWARD -i ${WG_INTERFACE} -j ACCEPT; \
-           ip6tables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+           ip6tables -D FORWARD -i ${WAN_INTERFACE} -o ${WG_INTERFACE} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
+           ip6tables -t nat -D POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE
 
 [Peer]
 PublicKey = ${CLIENT_PUBLIC_KEY}
