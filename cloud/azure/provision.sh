@@ -19,6 +19,8 @@ NETWORK_SECURITY_GROUP_NAME="${NETWORK_SECURITY_GROUP_NAME:-vpn-nsg}"
 WG_PORT="${WG_PORT:-51820}"
 ADMIN_USER="${ADMIN_USER:-}"
 VM_IMAGE="${VM_IMAGE:-Ubuntu2404}"
+AUTO_SHUTDOWN_TIME="${AUTO_SHUTDOWN_TIME:-23:59}"
+AUTO_SHUTDOWN_TIME_ZONE="${AUTO_SHUTDOWN_TIME_ZONE:-Romance Standard Time}"
 
 echo_info() {
     echo "[Azure INFO] $1"
@@ -187,7 +189,7 @@ write_run_command_script() {
 }
 
 main() {
-    local bootstrap_script public_ip client_config
+    local bootstrap_script public_ip client_config subscription_id vm_id shutdown_schedule_name shutdown_schedule_body
 
     echo "======================================================================"
     echo "Azure CLI Deployment for WireGuard VPN"
@@ -285,6 +287,41 @@ main() {
         --nics "${VM_NAME}-nic" \
         --os-disk-size-gb "$DISK_SIZE_GB" \
         --storage-sku "$DISK_TYPE" \
+        --output none
+
+    subscription_id=$(az account show --query id --output tsv)
+    vm_id=$(az vm show \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --name "$VM_NAME" \
+        --query id \
+        --output tsv)
+    shutdown_schedule_name="shutdown-computevm-${VM_NAME}"
+    shutdown_schedule_body=$(cat <<EOF
+{
+  "properties": {
+    "status": "Enabled",
+    "targetResourceId": "$vm_id",
+    "taskType": "ComputeVmShutdownTask",
+    "dailyRecurrence": {
+      "time": "${AUTO_SHUTDOWN_TIME//:/}"
+    },
+    "timeZoneId": "$AUTO_SHUTDOWN_TIME_ZONE",
+    "notificationSettings": {
+      "status": "Disabled",
+      "timeInMinutes": 30,
+      "emailRecipient": "",
+      "webhookUrl": ""
+    }
+  }
+}
+EOF
+)
+
+    echo_info "Enabling auto-shutdown at $AUTO_SHUTDOWN_TIME ($AUTO_SHUTDOWN_TIME_ZONE) without notification..."
+    az rest \
+        --method put \
+        --uri "https://management.azure.com/subscriptions/${subscription_id}/resourceGroups/${RESOURCE_GROUP_NAME}/providers/Microsoft.DevTestLab/schedules/${shutdown_schedule_name}?api-version=2018-09-15" \
+        --body "$shutdown_schedule_body" \
         --output none
 
     public_ip=$(az network public-ip show \
