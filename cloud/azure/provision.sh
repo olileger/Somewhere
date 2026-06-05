@@ -234,7 +234,7 @@ main() {
         --name "$NETWORK_SECURITY_GROUP_NAME" \
         --output none
 
-    echo_info "Allowing WireGuard; SSH remains blocked at the NSG"
+    echo_info "Allowing WireGuard and explicitly denying SSH from the Internet at the NSG"
     az network nsg rule create \
         --resource-group "$RESOURCE_GROUP_NAME" \
         --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
@@ -247,6 +247,20 @@ main() {
         --source-port-ranges '*' \
         --destination-address-prefixes '*' \
         --destination-port-ranges "$WG_PORT" \
+        --output none
+
+    az network nsg rule create \
+        --resource-group "$RESOURCE_GROUP_NAME" \
+        --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
+        --name DenySSH \
+        --priority 120 \
+        --access Deny \
+        --direction Inbound \
+        --protocol Tcp \
+        --source-address-prefixes Internet \
+        --source-port-ranges '*' \
+        --destination-address-prefixes '*' \
+        --destination-port-ranges 22 \
         --output none
 
     echo_info "Creating network interface..."
@@ -331,7 +345,7 @@ main() {
     printf '%s\n' "$client_config"
     echo ""
     echo "SSH:"
-    echo "  SSH stays enabled in the VM firewall, but remains blocked by the NSG on port 22."
+    echo "  SSH stays enabled in the VM firewall, but is denied by the NSG on port 22."
     echo ""
     echo "To terminate the deployment:"
     echo "  az group delete --name $RESOURCE_GROUP_NAME --yes --no-wait"
