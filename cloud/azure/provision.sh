@@ -352,11 +352,6 @@ main() {
     echo "Client config:"
     printf '%s\n' "$client_config"
     echo ""
-    echo "SSH:"
-    echo "  SSH stays enabled in the VM firewall, but is denied by the NSG on port 22."
-    echo ""
-    echo "To terminate the deployment:"
-    echo "  az group delete --name $RESOURCE_GROUP_NAME --yes --no-wait"
     echo "======================================================================"
 }
 
