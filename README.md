@@ -24,20 +24,29 @@ git clone https://github.com/olileger/Somewhere.git
 bash ./Somewhere/run.sh
 ```
 
-### 2. Keep the client configuration output from the script.
-Then copy/paste this output of the script to a new `client.conf` file:
+### 2. Download the generated client configuration.
+The script generates the client key pair locally and writes a ready-to-use `client.conf` next to the script. From the
+Azure Cloud Shell, download it to your device with the command printed at the end of the deployment, for example:
+```
+download "Somewhere/cloud/azure/client.conf"
+```
+The file looks like this:
 ```
 [Interface]
-PrivateKey = <configured private key>
+PrivateKey = <generated private key>
 Address = <configured IP address>
 DNS = <configured DNS server>
 
 [Peer]
-PublicKey = <key>
+PublicKey = <server public key>
 Endpoint = <configured endpoint>
 AllowedIPs = <configured allowed IPs>
 PersistentKeepalive = <configured keepalive>
 ```
+> Note: `client.conf` lives on the Cloud Shell's ephemeral storage and is removed
+> when the session ends, so download it before closing the shell. VPN parameters
+> (port, addresses, DNS, allowed IPs) are defined once in `vpn.conf` at the repo
+> root and shared by both the server setup and this client config.
 
 ### 3. Import the `client.conf` file into your WireGuard client.
 Open the WireGuard client on your device and import the `client.conf` file you created in step 2.

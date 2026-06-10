@@ -4,6 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SETUP_SCRIPT="${REPO_ROOT}/os/ubuntu/setup-vpn.sh"
+VPN_CONF_FILE="${VPN_CONF_FILE:-${REPO_ROOT}/vpn.conf}"
+if [ -f "$VPN_CONF_FILE" ]; then
+    . "$VPN_CONF_FILE"
+fi
 
 LOCATION="${LOCATION:-}"
 LOCATION_DISPLAY_NAME="${LOCATION_DISPLAY_NAME:-}"
@@ -17,6 +21,10 @@ SUBNET_NAME="${SUBNET_NAME:-vpn-subnet}"
 PUBLIC_IP_NAME="${PUBLIC_IP_NAME:-vpn-public-ip}"
 NETWORK_SECURITY_GROUP_NAME="${NETWORK_SECURITY_GROUP_NAME:-vpn-nsg}"
 WG_PORT="${WG_PORT:-51820}"
+WG_CLIENT_ADDRESS="${WG_CLIENT_ADDRESS:-10.8.0.2/24}"
+WG_CLIENT_DNS="${WG_CLIENT_DNS:-8.8.8.8, 8.8.4.4}"
+WG_CLIENT_ALLOWED_IPS="${WG_CLIENT_ALLOWED_IPS:-0.0.0.0/0, ::/0}"
+WG_CLIENT_KEEPALIVE="${WG_CLIENT_KEEPALIVE:-25}"
 ADMIN_USER="${ADMIN_USER:-}"
 VM_IMAGE="${VM_IMAGE:-Ubuntu2404}"
 AUTO_SHUTDOWN_TIME="${AUTO_SHUTDOWN_TIME:-2330}"
@@ -37,6 +45,32 @@ echo_error() {
 check_azure_cli() {
     if ! command -v az &> /dev/null; then
         echo_error "Azure CLI is not installed. Please install it first."
+    fi
+}
+
+check_keygen_tools() {
+    if ! command -v openssl &> /dev/null; then
+        echo_error "openssl is required to generate the client key pair. Please install it first."
+    fi
+}
+
+# Generate a WireGuard-compatible X25519 key pair locally using openssl only.
+# The client private key never leaves this machine; only the public key is sent
+# to the server. Produces CLIENT_PRIVATE_KEY and CLIENT_PUBLIC_KEY (base64).
+generate_client_keypair() {
+    local priv_file
+    priv_file="$(mktemp)"
+
+    # Derive both keys from the same private key so no DER header is hardcoded;
+    # the trailing 32 bytes of the DER encoding are the raw key material.
+    openssl genpkey -algorithm X25519 -out "$priv_file"
+    CLIENT_PRIVATE_KEY=$(openssl pkey -in "$priv_file" -outform DER | tail -c 32 | base64)
+    CLIENT_PUBLIC_KEY=$(openssl pkey -in "$priv_file" -pubout -outform DER | tail -c 32 | base64)
+
+    rm -f "$priv_file"
+
+    if [ -z "$CLIENT_PRIVATE_KEY" ] || [ -z "$CLIENT_PUBLIC_KEY" ]; then
+        echo_error "Failed to generate the client key pair."
     fi
 }
 
@@ -182,13 +216,17 @@ write_run_command_script() {
         printf 'export ADMIN_USER=%s\n' "$(shell_single_quote "$ADMIN_USER")"
         printf 'export ADMIN_PASSWORD=%s\n' "$(shell_single_quote "$ADMIN_PASSWORD")"
         printf 'export SERVER_PUBLIC_IP=%s\n' "$(shell_single_quote "$server_public_ip")"
+        printf 'export CLIENT_PUBLIC_KEY=%s\n' "$(shell_single_quote "$CLIENT_PUBLIC_KEY")"
+        printf '\n'
+        printf '# --- shared VPN configuration (vpn.conf) ---\n'
+        cat "$VPN_CONF_FILE"
         printf '\n'
         cat "$SETUP_SCRIPT"
     } > "$script_file"
 }
 
 main() {
-    local bootstrap_script public_ip client_config
+    local bootstrap_script public_ip server_public_key client_config_file
 
     echo "======================================================================"
     echo "Azure CLI Deployment for WireGuard VPN"
@@ -196,14 +234,20 @@ main() {
 
     check_azure_cli
     check_azure_login
+    check_keygen_tools
 
     if [ ! -f "$SETUP_SCRIPT" ]; then
         echo_error "Setup script not found at: $SETUP_SCRIPT"
     fi
 
+    if [ ! -f "$VPN_CONF_FILE" ]; then
+        echo_error "Shared VPN configuration not found at: $VPN_CONF_FILE"
+    fi
+
     select_location
     generate_admin_user
     prompt_admin_password
+    generate_client_keypair
 
     echo_info "Creating resource group..."
     az group create \
@@ -314,14 +358,38 @@ main() {
         --query "value[0].message" \
         --output tsv
 
-    echo_info "Retrieving client configuration..."
-    client_config=$(az vm run-command invoke \
+    echo_info "Retrieving server public key..."
+    server_public_key=$(az vm run-command invoke \
         --resource-group "$RESOURCE_GROUP_NAME" \
         --name "$VM_NAME" \
         --command-id RunShellScript \
-        --scripts "cat /etc/wireguard/clients/client.conf" \
+        --scripts "cat /etc/wireguard/publickey" \
         --query "value[0].message" \
         --output tsv)
+
+    # Run Command wraps stdout/stderr; keep only the base64 key line.
+    server_public_key=$(printf '%s\n' "$server_public_key" \
+        | grep -Eo '[A-Za-z0-9+/]{42,43}=' | head -n 1)
+
+    if [ -z "$server_public_key" ]; then
+        echo_error "Could not retrieve the server public key."
+    fi
+
+    echo_info "Assembling client configuration locally..."
+    client_config_file="${CLIENT_CONFIG_OUTPUT:-${SCRIPT_DIR}/client.conf}"
+    umask 077
+    cat > "$client_config_file" <<EOF
+[Interface]
+PrivateKey = ${CLIENT_PRIVATE_KEY}
+Address = ${WG_CLIENT_ADDRESS}
+DNS = ${WG_CLIENT_DNS}
+
+[Peer]
+PublicKey = ${server_public_key}
+Endpoint = ${public_ip}:${WG_PORT}
+AllowedIPs = ${WG_CLIENT_ALLOWED_IPS}
+PersistentKeepalive = ${WG_CLIENT_KEEPALIVE}
+EOF
 
     echo ""
     echo "======================================================================"
@@ -344,13 +412,15 @@ main() {
     echo "  Endpoint: ${public_ip}:${WG_PORT}"
     echo ""
     echo "Client Configuration:"
-    echo "  The client config file is generated on the server at:"
-    echo "    /etc/wireguard/clients/client.conf"
-    echo "    /etc/wireguard/clients/client_privatekey"
-    echo "    /etc/wireguard/clients/client_publickey"
-    echo ""
-    echo "Client config:"
-    printf '%s\n' "$client_config"
+    echo "  The client key pair was generated locally; the private key never"
+    echo "  reached the server. Import this file into the WireGuard app:"
+    echo "    ${client_config_file}"
+    if [ -n "${AZUREPS_HOST_ENVIRONMENT:-}" ] || [ -n "${ACC_CLOUD:-}" ]; then
+        echo ""
+        echo "  Running in Azure Cloud Shell. Download the config to your machine with:"
+        echo "    download \"${client_config_file}\""
+        echo "  It lives on ephemeral storage and is removed when the session ends."
+    fi
     echo ""
     echo "======================================================================"
 }
