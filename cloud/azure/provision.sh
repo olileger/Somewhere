@@ -466,9 +466,11 @@ EOF
     echo "  VM Size: $VM_SIZE"
     echo "  Resource Group: $RESOURCE_GROUP_NAME"
     echo ""
-    echo "Credentials (save these!):"
-    echo "  Admin Username: $ADMIN_USER"
-    echo ""
+    if [ "$ENABLE_SSH" = "true" ]; then
+        echo "Credentials (save these!):"
+        echo "  Admin Username: $ADMIN_USER"
+        echo ""
+    fi
     echo "WireGuard Configuration:"
     echo "  Port: ${WG_PORT}/udp"
     echo "  Endpoint: ${public_ip}:${WG_PORT}"
@@ -476,10 +478,6 @@ EOF
     if [ "$ENABLE_SSH" = "true" ]; then
         echo "SSH Access:"
         echo "  DEBUG MODE: SSH is ENABLED on port 22 (NSG AllowSSH + VM firewall)"
-        echo ""
-    else
-        echo "SSH Access:"
-        echo "  Disabled (no SSH server, no NSG rule, port 22 closed). Use --debug to enable."
         echo ""
     fi
     echo "Client Configuration:"
