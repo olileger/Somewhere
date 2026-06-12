@@ -28,6 +28,7 @@ WG_CLIENT_KEEPALIVE="${WG_CLIENT_KEEPALIVE:-25}"
 ADMIN_USER="${ADMIN_USER:-}"
 VM_IMAGE="${VM_IMAGE:-Ubuntu2404}"
 AUTO_SHUTDOWN_TIME="${AUTO_SHUTDOWN_TIME:-2330}"
+bootstrap_script=""
 
 echo_info() {
     echo "[Azure INFO] $1"
@@ -226,7 +227,7 @@ write_run_command_script() {
 }
 
 main() {
-    local bootstrap_script public_ip server_public_key client_config_file
+    local public_ip server_public_key client_config_file
 
     echo "======================================================================"
     echo "Azure CLI Deployment for WireGuard VPN"
@@ -346,7 +347,7 @@ main() {
         --output tsv)
 
     bootstrap_script="$(mktemp)"
-    trap 'rm -f "$bootstrap_script"' EXIT
+    trap 'rm -f "${bootstrap_script:-}"' EXIT
     write_run_command_script "$bootstrap_script" "$public_ip"
 
     echo_info "Running os/ubuntu/setup-vpn.sh through Run Command..."
