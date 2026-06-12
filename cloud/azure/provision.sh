@@ -196,6 +196,38 @@ generate_admin_user() {
     fi
 }
 
+rand_chars() {
+    local set="$1" count="$2" out="" i
+    for ((i = 0; i < count; i++)); do
+        out+="${set:$((RANDOM % ${#set})):1}"
+    done
+    printf '%s' "$out"
+}
+
+# Generate a random admin/sudo password that satisfies Azure complexity rules:
+# 13-20 chars, >=2 uppercase, >=3 digits, >=3 special characters.
+generate_admin_password() {
+    local upper_set='ABCDEFGHJKLMNPQRSTUVWXYZ'
+    local digit_set='23456789'
+    local special_set='@#%*-_=+'
+    local lower_set='abcdefghijkmnpqrstuvwxyz'
+    local total lower_count assembled
+
+    total=$(( (RANDOM % 8) + 13 ))            # 13..20
+    lower_count=$(( total - 8 ))              # remaining after 2+3+3 required chars
+
+    assembled="$(rand_chars "$upper_set" 2)"
+    assembled+="$(rand_chars "$digit_set" 3)"
+    assembled+="$(rand_chars "$special_set" 3)"
+    assembled+="$(rand_chars "$lower_set" "$lower_count")"
+
+    ADMIN_PASSWORD="$(printf '%s' "$assembled" | fold -w1 | shuf | tr -d '\n')"
+
+    if [ "${#ADMIN_PASSWORD}" -ne "$total" ]; then
+        echo_error "Failed to generate a valid admin password."
+    fi
+}
+
 prompt_admin_password() {
     local admin_password_confirm
 
@@ -270,7 +302,11 @@ main() {
 
     select_location
     generate_admin_user
-    prompt_admin_password
+    if [ "$ENABLE_SSH" = "true" ]; then
+        prompt_admin_password
+    else
+        generate_admin_password
+    fi
     generate_client_keypair
 
     echo_info "Creating resource group..."
