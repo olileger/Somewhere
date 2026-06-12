@@ -484,10 +484,11 @@ EOF
     echo "    ${client_config_file}"
     if [ -n "${AZUREPS_HOST_ENVIRONMENT:-}" ] || [ -n "${ACC_CLOUD:-}" ]; then
         echo ""
-        echo "  From the Azure Cloud Shell, download the config file with the following command:"
+        echo "    From the Azure Cloud Shell, download the config file with the following command:"
+        echo ""
         echo "    download \"${client_config_file}\""
         echo ""
-        echo "  It lives on ephemeral storage and is removed when the session ends."
+        echo "    It lives on ephemeral storage and is removed when the session ends."
     fi
     echo ""
     echo "======================================================================"
