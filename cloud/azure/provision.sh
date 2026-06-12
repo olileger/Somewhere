@@ -11,6 +11,7 @@ fi
 
 LOCATION="${LOCATION:-}"
 LOCATION_DISPLAY_NAME="${LOCATION_DISPLAY_NAME:-}"
+RESOURCE_GROUP_NAME_EXPLICIT="${RESOURCE_GROUP_NAME:+1}"
 RESOURCE_GROUP_NAME="${RESOURCE_GROUP_NAME:-somewhere}"
 VM_SIZE="${VM_SIZE:-Standard_B1ls}"
 DISK_SIZE_GB="${DISK_SIZE_GB:-32}"
@@ -28,7 +29,26 @@ WG_CLIENT_KEEPALIVE="${WG_CLIENT_KEEPALIVE:-25}"
 ADMIN_USER="${ADMIN_USER:-}"
 VM_IMAGE="${VM_IMAGE:-Ubuntu2404}"
 AUTO_SHUTDOWN_TIME="${AUTO_SHUTDOWN_TIME:-2330}"
+ENABLE_SSH="${ENABLE_SSH:-false}"
 bootstrap_script=""
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --debug)
+                ENABLE_SSH=true
+                ;;
+            *)
+                echo_error "Unknown argument: $1 (supported: --debug)"
+                ;;
+        esac
+        shift
+    done
+
+    if [ "$ENABLE_SSH" = "true" ] && [ -z "$RESOURCE_GROUP_NAME_EXPLICIT" ]; then
+        RESOURCE_GROUP_NAME="somewhere-debug"
+    fi
+}
 
 echo_info() {
     echo "[Azure INFO] $1"
@@ -218,6 +238,7 @@ write_run_command_script() {
         printf 'export ADMIN_PASSWORD=%s\n' "$(shell_single_quote "$ADMIN_PASSWORD")"
         printf 'export SERVER_PUBLIC_IP=%s\n' "$(shell_single_quote "$server_public_ip")"
         printf 'export CLIENT_PUBLIC_KEY=%s\n' "$(shell_single_quote "$CLIENT_PUBLIC_KEY")"
+        printf 'export ENABLE_SSH=%s\n' "$(shell_single_quote "$ENABLE_SSH")"
         printf '\n'
         printf '# --- shared VPN configuration (vpn.conf) ---\n'
         cat "$VPN_CONF_FILE"
@@ -228,6 +249,8 @@ write_run_command_script() {
 
 main() {
     local public_ip server_public_key client_config_file
+
+    parse_args "$@"
 
     echo "======================================================================"
     echo "Azure CLI Deployment for WireGuard VPN"
@@ -280,7 +303,7 @@ main() {
         --name "$NETWORK_SECURITY_GROUP_NAME" \
         --output none
 
-    echo_info "Allowing WireGuard and explicitly denying SSH from the Internet at the NSG"
+    echo_info "Allowing WireGuard from the Internet at the NSG"
     az network nsg rule create \
         --resource-group "$RESOURCE_GROUP_NAME" \
         --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
@@ -295,19 +318,22 @@ main() {
         --destination-port-ranges "$WG_PORT" \
         --output none
 
-    az network nsg rule create \
-        --resource-group "$RESOURCE_GROUP_NAME" \
-        --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
-        --name DenySSH \
-        --priority 120 \
-        --access Deny \
-        --direction Inbound \
-        --protocol Tcp \
-        --source-address-prefixes Internet \
-        --source-port-ranges '*' \
-        --destination-address-prefixes '*' \
-        --destination-port-ranges 22 \
-        --output none
+    if [ "$ENABLE_SSH" = "true" ]; then
+        echo_info "Allowing SSH (debug mode) from the Internet at the NSG"
+        az network nsg rule create \
+            --resource-group "$RESOURCE_GROUP_NAME" \
+            --nsg-name "$NETWORK_SECURITY_GROUP_NAME" \
+            --name AllowSSH \
+            --priority 120 \
+            --access Allow \
+            --direction Inbound \
+            --protocol Tcp \
+            --source-address-prefixes Internet \
+            --source-port-ranges '*' \
+            --destination-address-prefixes '*' \
+            --destination-port-ranges 22 \
+            --output none
+    fi
 
     echo_info "Creating network interface..."
     az network nic create \
@@ -411,6 +437,15 @@ EOF
     echo "  Port: ${WG_PORT}/udp"
     echo "  Endpoint: ${public_ip}:${WG_PORT}"
     echo ""
+    if [ "$ENABLE_SSH" = "true" ]; then
+        echo "SSH Access:"
+        echo "  DEBUG MODE: SSH is ENABLED on port 22 (NSG AllowSSH + VM firewall)"
+        echo ""
+    else
+        echo "SSH Access:"
+        echo "  Disabled (no SSH server, no NSG rule, port 22 closed). Use --debug to enable."
+        echo ""
+    fi
     echo "Client Configuration:"
     echo "    ${client_config_file}"
     if [ -n "${AZUREPS_HOST_ENVIRONMENT:-}" ] || [ -n "${ACC_CLOUD:-}" ]; then

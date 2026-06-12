@@ -24,6 +24,11 @@ git clone https://github.com/olileger/Somewhere.git
 bash ./Somewhere/run.sh
 ```
 
+By default, SSH is **not** installed or exposed (no SSH server, and no NSG rule for port 22 at all). To deploy a debug-friendly server with SSH enabled (SSH server installed, NSG `AllowSSH` rule, and the VM firewall opening port 22), pass the `--debug` flag:
+```
+bash ./Somewhere/run.sh --debug
+```
+
 ### 2. Download the generated client configuration.
 The script generates the client key pair locally and writes a ready-to-use `client.conf` next to the script. From the
 Azure Cloud Shell, download it to your device with the command printed at the end of the deployment, for example:

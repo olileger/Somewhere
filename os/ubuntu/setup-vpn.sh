@@ -20,6 +20,7 @@ WG_PRIVATE_KEY_FILE="${WG_CONFIG_DIR}/privatekey"
 WG_PUBLIC_KEY_FILE="${WG_CONFIG_DIR}/publickey"
 ADMIN_USER="${ADMIN_USER:-}"
 CLIENT_PUBLIC_KEY="${CLIENT_PUBLIC_KEY:-}"
+ENABLE_SSH="${ENABLE_SSH:-false}"
 WAN_INTERFACE=""
 
 echo_info() {
@@ -112,7 +113,12 @@ get_wan_interface
 echo_info "Updating package index and installing WireGuard..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends wireguard-tools iptables iptables-persistent curl sudo openssh-server
+apt-get install -y --no-install-recommends wireguard-tools iptables iptables-persistent curl sudo
+
+if [ "$ENABLE_SSH" = "true" ]; then
+    echo_info "Debug mode: installing SSH server..."
+    apt-get install -y --no-install-recommends openssh-server
+fi
 
 if ! modprobe wireguard 2>/dev/null; then
     echo_warn "WireGuard kernel module not available; the image/kernel may already provide it."
@@ -185,8 +191,10 @@ iptables -A INPUT -i lo -j ACCEPT
 ip6tables -A INPUT -i lo -j ACCEPT
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
+if [ "$ENABLE_SSH" = "true" ]; then
+    iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+    ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
+fi
 iptables -A INPUT -p udp --dport "${WG_PORT}" -j ACCEPT
 ip6tables -A INPUT -p udp --dport "${WG_PORT}" -j ACCEPT
 iptables -A INPUT -p icmp -j ACCEPT
@@ -196,7 +204,9 @@ iptables-save > /etc/iptables/rules.v4
 ip6tables-save > /etc/iptables/rules.v6
 netfilter-persistent save
 systemctl enable netfilter-persistent
-systemctl enable --now ssh
+if [ "$ENABLE_SSH" = "true" ]; then
+    systemctl enable --now ssh
+fi
 
 echo_info "Configuring WireGuard to start on boot..."
 systemctl enable "wg-quick@${WG_INTERFACE}"
@@ -215,7 +225,11 @@ echo "Server public IP: ${SERVER_PUBLIC_IP}"
 echo "WireGuard port: ${WG_PORT}"
 echo ""
 echo "Security notes:"
-echo "  - SSH is ENABLED in the VM firewall but blocked at the NSG on port 22"
+if [ "$ENABLE_SSH" = "true" ]; then
+    echo "  - DEBUG MODE: SSH is ENABLED (VM firewall + NSG allow port 22)"
+else
+    echo "  - SSH is NOT installed/enabled; port 22 is closed in the VM firewall (no NSG rule)"
+fi
 echo "  - IP forwarding is enabled"
 echo "  - Firewall rules are persistent"
 echo "  - WireGuard will start automatically on boot"
