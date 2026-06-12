@@ -417,6 +417,7 @@ EOF
         echo ""
         echo "  From the Azure Cloud Shell, download the config file with the following command:"
         echo "    download \"${client_config_file}\""
+        echo ""
         echo "  It lives on ephemeral storage and is removed when the session ends."
     fi
     echo ""
