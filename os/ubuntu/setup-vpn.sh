@@ -197,8 +197,17 @@ if [ "$ENABLE_SSH" = "true" ]; then
 fi
 iptables -A INPUT -p udp --dport "${WG_PORT}" -j ACCEPT
 ip6tables -A INPUT -p udp --dport "${WG_PORT}" -j ACCEPT
-iptables -A INPUT -p icmp -j ACCEPT
-ip6tables -A INPUT -p icmpv6 -j ACCEPT
+# ICMP hardening (issue #10): do not accept ICMP echo from the Internet.
+# Keep ICMP types required for Path MTU Discovery so the tunnel stays healthy,
+# and only allow ping (echo-request) coming from the WireGuard tunnel interface.
+iptables -A INPUT -p icmp --icmp-type fragmentation-needed -j ACCEPT
+iptables -A INPUT -i "${WG_INTERFACE}" -p icmp --icmp-type echo-request -j ACCEPT
+# ICMPv6 is required for correct IPv6 operation (Neighbor Discovery, PMTUD).
+ip6tables -A INPUT -p icmpv6 --icmpv6-type packet-too-big -j ACCEPT
+ip6tables -A INPUT -p icmpv6 --icmpv6-type neighbour-solicitation -j ACCEPT
+ip6tables -A INPUT -p icmpv6 --icmpv6-type neighbour-advertisement -j ACCEPT
+ip6tables -A INPUT -p icmpv6 --icmpv6-type router-advertisement -j ACCEPT
+ip6tables -A INPUT -i "${WG_INTERFACE}" -p icmpv6 --icmpv6-type echo-request -j ACCEPT
 
 iptables-save > /etc/iptables/rules.v4
 ip6tables-save > /etc/iptables/rules.v6
