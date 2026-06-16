@@ -36,43 +36,6 @@ echo_error() {
     exit 1
 }
 
-get_credentials() {
-    if [ $# -ge 1 ]; then
-        ADMIN_PASSWORD="$1"
-        return
-    fi
-
-    if [ -n "${ADMIN_PASSWORD:-}" ]; then
-        return
-    fi
-
-    if [ -t 0 ]; then
-        while true; do
-            printf "Enter admin/sudo password for the VM: "
-            read -r ADMIN_PASSWORD
-            if [ -n "$ADMIN_PASSWORD" ]; then
-                break
-            fi
-            echo_error "Password cannot be empty."
-        done
-
-        while true; do
-            printf "Confirm admin/sudo password: "
-            read -r ADMIN_PASSWORD_CONFIRM
-            if [ -n "$ADMIN_PASSWORD_CONFIRM" ]; then
-                if [ "$ADMIN_PASSWORD" = "$ADMIN_PASSWORD_CONFIRM" ]; then
-                    break
-                fi
-                echo_error "Passwords do not match."
-            fi
-            echo_error "Password cannot be empty."
-        done
-    else
-        echo_error "No credentials provided and not in interactive mode."
-        echo_error "Please provide ADMIN_PASSWORD as an environment variable."
-    fi
-}
-
 get_admin_user() {
     if [ -z "${ADMIN_USER:-}" ]; then
         ADMIN_USER=$(LC_ALL=C tr -dc 'a-z' </dev/urandom | head -c 12 || true)
@@ -105,7 +68,6 @@ get_wan_interface() {
     fi
 }
 
-get_credentials "$@"
 get_admin_user
 get_client_public_key
 get_wan_interface
@@ -129,8 +91,12 @@ if ! id "$ADMIN_USER" &>/dev/null; then
     adduser --disabled-password --gecos "" "$ADMIN_USER" || echo_error "Failed to create admin user."
 fi
 
-echo "${ADMIN_USER}:${ADMIN_PASSWORD}" | chpasswd || echo_error "Failed to set password."
+# Key-based authentication only: the account has no password (issue #2).
+# Grant passwordless sudo so administrative tasks remain possible over SSH
+# without ever handling a cleartext password.
 usermod -aG sudo "$ADMIN_USER" || echo_error "Failed to add admin user to sudo group."
+printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$ADMIN_USER" > "/etc/sudoers.d/90-${ADMIN_USER}"
+chmod 440 "/etc/sudoers.d/90-${ADMIN_USER}"
 
 echo_info "Preparing configuration directories..."
 mkdir -p "$WG_CONFIG_DIR"
@@ -236,6 +202,8 @@ echo ""
 echo "Security notes:"
 if [ "$ENABLE_SSH" = "true" ]; then
     echo "  - DEBUG MODE: SSH is ENABLED (VM firewall + NSG allow port 22)"
+    echo "  - SSH uses key-based authentication only; the admin account has no password"
+    echo "  - The admin account has passwordless (NOPASSWD) sudo"
 else
     echo "  - SSH is NOT installed/enabled; port 22 is closed in the VM firewall (no NSG rule)"
 fi

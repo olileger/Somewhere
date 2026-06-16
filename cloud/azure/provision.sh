@@ -73,6 +73,9 @@ check_keygen_tools() {
     if ! command -v openssl &> /dev/null; then
         echo_error "openssl is required to generate the client key pair. Please install it first."
     fi
+    if ! command -v ssh-keygen &> /dev/null; then
+        echo_error "ssh-keygen is required to generate the VM SSH key pair. Please install it first."
+    fi
 }
 
 # Generate a WireGuard-compatible X25519 key pair locally using openssl only.
@@ -196,62 +199,20 @@ generate_admin_user() {
     fi
 }
 
-rand_chars() {
-    local set="$1" count="$2" out="" i
-    for ((i = 0; i < count; i++)); do
-        out+="${set:$((RANDOM % ${#set})):1}"
-    done
-    printf '%s' "$out"
-}
+# Generate an SSH key pair locally for the VM admin account. Only the public key
+# is sent to Azure (and placed in the VM's authorized_keys); the private key
+# never leaves the caller. Produces SSH_PRIVATE_KEY_FILE and SSH_PUBLIC_KEY_FILE.
+generate_ssh_keypair() {
+    SSH_KEY_DIR="$(mktemp -d)"
+    SSH_PRIVATE_KEY_FILE="${SSH_KEY_DIR}/id_ed25519"
+    SSH_PUBLIC_KEY_FILE="${SSH_PRIVATE_KEY_FILE}.pub"
 
-# Generate a random admin/sudo password that satisfies Azure complexity rules:
-# 13-20 chars, >=2 uppercase, >=3 digits, >=3 special characters.
-generate_admin_password() {
-    local upper_set='ABCDEFGHJKLMNPQRSTUVWXYZ'
-    local digit_set='23456789'
-    local special_set='@#%*-_=+'
-    local lower_set='abcdefghijkmnpqrstuvwxyz'
-    local total lower_count assembled
+    ssh-keygen -t ed25519 -N '' -C "$ADMIN_USER" -f "$SSH_PRIVATE_KEY_FILE" >/dev/null 2>&1 \
+        || echo_error "Failed to generate the VM SSH key pair."
 
-    total=$(( (RANDOM % 8) + 13 ))            # 13..20
-    lower_count=$(( total - 8 ))              # remaining after 2+3+3 required chars
-
-    assembled="$(rand_chars "$upper_set" 2)"
-    assembled+="$(rand_chars "$digit_set" 3)"
-    assembled+="$(rand_chars "$special_set" 3)"
-    assembled+="$(rand_chars "$lower_set" "$lower_count")"
-
-    ADMIN_PASSWORD="$(printf '%s' "$assembled" | fold -w1 | shuf | tr -d '\n')"
-
-    if [ "${#ADMIN_PASSWORD}" -ne "$total" ]; then
-        echo_error "Failed to generate a valid admin password."
+    if [ ! -f "$SSH_PRIVATE_KEY_FILE" ] || [ ! -f "$SSH_PUBLIC_KEY_FILE" ]; then
+        echo_error "Failed to generate the VM SSH key pair."
     fi
-}
-
-prompt_admin_password() {
-    local admin_password_confirm
-
-    while true; do
-        echo "The password length must be between 12 and 72. Password must have 3 of the following: 1 lower case character, 1 upper case character, 1 number and 1 special character."
-        read -r -s -p "Enter admin/sudo password for the VM: " ADMIN_PASSWORD
-        echo
-        if [ -n "$ADMIN_PASSWORD" ]; then
-            break
-        fi
-        echo_error "Password cannot be empty."
-    done
-
-    while true; do
-        read -r -s -p "Confirm admin/sudo password: " admin_password_confirm
-        echo
-        if [ -n "$admin_password_confirm" ]; then
-            if [ "$ADMIN_PASSWORD" = "$admin_password_confirm" ]; then
-                break
-            fi
-            echo_error "Passwords do not match."
-        fi
-        echo_error "Password cannot be empty."
-    done
 }
 
 shell_single_quote() {
@@ -267,7 +228,6 @@ write_run_command_script() {
         printf 'set -euo pipefail\n'
         printf 'export DEBIAN_FRONTEND=noninteractive\n'
         printf 'export ADMIN_USER=%s\n' "$(shell_single_quote "$ADMIN_USER")"
-        printf 'export ADMIN_PASSWORD=%s\n' "$(shell_single_quote "$ADMIN_PASSWORD")"
         printf 'export SERVER_PUBLIC_IP=%s\n' "$(shell_single_quote "$server_public_ip")"
         printf 'export CLIENT_PUBLIC_KEY=%s\n' "$(shell_single_quote "$CLIENT_PUBLIC_KEY")"
         printf 'export ENABLE_SSH=%s\n' "$(shell_single_quote "$ENABLE_SSH")"
@@ -280,7 +240,7 @@ write_run_command_script() {
 }
 
 main() {
-    local public_ip server_public_key client_config_file
+    local public_ip server_public_key client_config_file ssh_private_key_output
 
     parse_args "$@"
 
@@ -302,11 +262,8 @@ main() {
 
     select_location
     generate_admin_user
-    if [ "$ENABLE_SSH" = "true" ]; then
-        prompt_admin_password
-    else
-        generate_admin_password
-    fi
+    generate_ssh_keypair
+    trap 'rm -rf "${bootstrap_script:-}" "${SSH_KEY_DIR:-}"' EXIT
     generate_client_keypair
 
     echo_info "Creating resource group..."
@@ -388,8 +345,8 @@ main() {
         --image "$VM_IMAGE" \
         --size "$VM_SIZE" \
         --admin-username "$ADMIN_USER" \
-        --admin-password "$ADMIN_PASSWORD" \
-        --authentication-type password \
+        --ssh-key-values "$SSH_PUBLIC_KEY_FILE" \
+        --authentication-type ssh \
         --nics "${VM_NAME}-nic" \
         --os-disk-size-gb "$DISK_SIZE_GB" \
         --storage-sku "$DISK_TYPE" \
@@ -409,7 +366,7 @@ main() {
         --output tsv)
 
     bootstrap_script="$(mktemp)"
-    trap 'rm -f "${bootstrap_script:-}"' EXIT
+    trap 'rm -rf "${bootstrap_script:-}" "${SSH_KEY_DIR:-}"' EXIT
     write_run_command_script "$bootstrap_script" "$public_ip"
 
     echo_info "Running os/ubuntu/setup-vpn.sh through Run Command..."
@@ -454,6 +411,13 @@ AllowedIPs = ${WG_CLIENT_ALLOWED_IPS}
 PersistentKeepalive = ${WG_CLIENT_KEEPALIVE}
 EOF
 
+    if [ "$ENABLE_SSH" = "true" ]; then
+        echo_info "Saving the VM SSH private key locally..."
+        ssh_private_key_output="${SSH_PRIVATE_KEY_OUTPUT:-${SCRIPT_DIR}/ssh_private_key}"
+        umask 077
+        cp "$SSH_PRIVATE_KEY_FILE" "$ssh_private_key_output"
+    fi
+
     echo ""
     echo "======================================================================"
     echo "Azure CLI Deployment Complete!"
@@ -478,6 +442,18 @@ EOF
     if [ "$ENABLE_SSH" = "true" ]; then
         echo "SSH Access:"
         echo "  DEBUG MODE: SSH is ENABLED on port 22 (NSG AllowSSH + VM firewall)"
+        echo "  Authentication: SSH key only (no password); sudo is passwordless"
+        echo "  Private key: ${ssh_private_key_output}"
+        echo "  Connect with:"
+        echo "    ssh -i \"${ssh_private_key_output}\" ${ADMIN_USER}@${public_ip}"
+        if [ -n "${AZUREPS_HOST_ENVIRONMENT:-}" ] || [ -n "${ACC_CLOUD:-}" ]; then
+            echo ""
+            echo "    To use the key from your own machine, download it from Azure Cloud Shell:"
+            echo ""
+            echo "    download \"${ssh_private_key_output}\""
+            echo ""
+            echo "    It lives on ephemeral storage and is removed when the session ends."
+        fi
         echo ""
     fi
     echo "Client Configuration:"
