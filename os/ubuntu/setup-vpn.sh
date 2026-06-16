@@ -79,8 +79,8 @@ apt-get update
 apt-get install -y --no-install-recommends wireguard-tools iptables iptables-persistent curl sudo
 
 if [ "$ENABLE_SSH" = "true" ]; then
-    echo_info "Debug mode: installing SSH server..."
-    apt-get install -y --no-install-recommends openssh-server
+    echo_info "Debug mode: installing SSH server and fail2ban..."
+    apt-get install -y --no-install-recommends openssh-server fail2ban
 fi
 
 if ! modprobe wireguard 2>/dev/null; then
@@ -144,6 +144,53 @@ EOF
 
 chmod 600 "${WG_CONFIG_DIR}/${WG_INTERFACE}.conf"
 
+if [ "$ENABLE_SSH" = "true" ]; then
+    # SSH brute-force protection and sshd hardening (issue #7). SSH only exists
+    # in debug mode, so the entire mitigation is scoped to that path.
+    echo_info "Hardening sshd and configuring fail2ban (issue #7)..."
+
+    # sshd hardening: cut the brute-force surface (low MaxAuthTries, short grace
+    # window), forbid password/root logins, restrict to the admin account, and
+    # only offer modern key-exchange/cipher/MAC algorithms.
+    mkdir -p /etc/ssh/sshd_config.d
+    cat > /etc/ssh/sshd_config.d/99-hardening.conf <<EOF
+MaxAuthTries 3
+LoginGraceTime 20
+MaxSessions 2
+PermitRootLogin no
+PasswordAuthentication no
+PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PubkeyAuthentication yes
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+AllowUsers ${ADMIN_USER}
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com
+EOF
+    chmod 644 /etc/ssh/sshd_config.d/99-hardening.conf
+
+    if ! sshd -t; then
+        echo_error "sshd configuration is invalid after hardening."
+    fi
+
+    # fail2ban sshd jail: ban hosts that fail authentication repeatedly. Uses the
+    # systemd journal backend so it works regardless of where sshd logs.
+    mkdir -p /etc/fail2ban/jail.d
+    cat > /etc/fail2ban/jail.d/sshd.local <<EOF
+[sshd]
+enabled = true
+backend = systemd
+port = ssh
+maxretry = 3
+findtime = 10m
+bantime = 1h
+EOF
+fi
+
 echo_info "Enabling IP forwarding..."
 cat > /etc/sysctl.d/99-wireguard.conf <<EOF
 net.ipv4.ip_forward = 1
@@ -192,6 +239,7 @@ netfilter-persistent save
 systemctl enable netfilter-persistent
 if [ "$ENABLE_SSH" = "true" ]; then
     systemctl enable --now ssh
+    systemctl enable --now fail2ban
 fi
 
 echo_info "Configuring automatic security updates (issue #4)..."
@@ -264,6 +312,8 @@ if [ "$ENABLE_SSH" = "true" ]; then
     echo "  - DEBUG MODE: SSH is ENABLED (VM firewall + NSG allow port 22)"
     echo "  - SSH uses key-based authentication only; the admin account has no password"
     echo "  - The admin account has passwordless (NOPASSWD) sudo"
+    echo "  - sshd is hardened (MaxAuthTries 3, no root/password login, modern ciphers)"
+    echo "  - fail2ban bans hosts after 3 failed SSH auth attempts"
 else
     echo "  - SSH is NOT installed/enabled; port 22 is closed in the VM firewall (no NSG rule)"
 fi
