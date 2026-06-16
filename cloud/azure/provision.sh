@@ -98,6 +98,19 @@ generate_client_keypair() {
     fi
 }
 
+# Generate a WireGuard preshared key (32 random bytes, base64) locally in Cloud
+# Shell, mirroring the client key pair. The shared symmetric secret is pushed to
+# the server through the Run Command script payload (never via stdout) and written
+# into the client config locally, so it never crosses the control plane as output
+# (issue #5). Produces WG_PRESHARED_KEY (base64).
+generate_preshared_key() {
+    WG_PRESHARED_KEY=$(openssl rand -base64 32)
+
+    if [ -z "$WG_PRESHARED_KEY" ]; then
+        echo_error "Failed to generate the WireGuard preshared key."
+    fi
+}
+
 check_azure_login() {
     if ! az account show &> /dev/null; then
         echo_error "Not logged in to Azure. Please run 'az login' first."
@@ -230,6 +243,7 @@ write_run_command_script() {
         printf 'export ADMIN_USER=%s\n' "$(shell_single_quote "$ADMIN_USER")"
         printf 'export SERVER_PUBLIC_IP=%s\n' "$(shell_single_quote "$server_public_ip")"
         printf 'export CLIENT_PUBLIC_KEY=%s\n' "$(shell_single_quote "$CLIENT_PUBLIC_KEY")"
+        printf 'export WG_PRESHARED_KEY=%s\n' "$(shell_single_quote "$WG_PRESHARED_KEY")"
         printf 'export ENABLE_SSH=%s\n' "$(shell_single_quote "$ENABLE_SSH")"
         printf '\n'
         printf '# --- shared VPN configuration (vpn.conf) ---\n'
@@ -265,6 +279,7 @@ main() {
     generate_ssh_keypair
     trap 'rm -rf "${bootstrap_script:-}" "${SSH_KEY_DIR:-}"' EXIT
     generate_client_keypair
+    generate_preshared_key
 
     echo_info "Creating resource group..."
     az group create \
@@ -406,6 +421,7 @@ DNS = ${WG_CLIENT_DNS}
 
 [Peer]
 PublicKey = ${server_public_key}
+PresharedKey = ${WG_PRESHARED_KEY}
 Endpoint = ${public_ip}:${WG_PORT}
 AllowedIPs = ${WG_CLIENT_ALLOWED_IPS}
 PersistentKeepalive = ${WG_CLIENT_KEEPALIVE}

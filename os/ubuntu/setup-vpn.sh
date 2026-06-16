@@ -20,6 +20,7 @@ WG_PRIVATE_KEY_FILE="${WG_CONFIG_DIR}/privatekey"
 WG_PUBLIC_KEY_FILE="${WG_CONFIG_DIR}/publickey"
 ADMIN_USER="${ADMIN_USER:-}"
 CLIENT_PUBLIC_KEY="${CLIENT_PUBLIC_KEY:-}"
+WG_PRESHARED_KEY="${WG_PRESHARED_KEY:-}"
 ENABLE_SSH="${ENABLE_SSH:-false}"
 WAN_INTERFACE=""
 
@@ -105,6 +106,15 @@ echo_info "Generating WireGuard server keys..."
 wg genkey | tee "$WG_PRIVATE_KEY_FILE" | wg pubkey > "$WG_PUBLIC_KEY_FILE"
 chmod 600 "$WG_PRIVATE_KEY_FILE"
 
+# The preshared key is a shared symmetric secret. The Azure caller generates it
+# and pushes it through the Run Command payload; if absent (standalone runs) we
+# generate one here. It is never echoed so it can never leak into Run Command
+# output, status files, or waagent logs (issue #5).
+if [ -z "${WG_PRESHARED_KEY:-}" ]; then
+    echo_warn "No preshared key supplied by the caller; generating one on the server."
+    WG_PRESHARED_KEY=$(wg genpsk)
+fi
+
 echo_info "Configuring WireGuard server..."
 WG_SERVER_PRIVATE_KEY=$(cat "$WG_PRIVATE_KEY_FILE")
 
@@ -128,6 +138,7 @@ PostDown = iptables -D FORWARD -i ${WG_INTERFACE} -j ACCEPT; \
 
 [Peer]
 PublicKey = ${CLIENT_PUBLIC_KEY}
+PresharedKey = ${WG_PRESHARED_KEY}
 AllowedIPs = ${WG_SERVER_PEER_ALLOWED_IPS}
 EOF
 
