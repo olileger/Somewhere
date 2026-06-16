@@ -125,16 +125,10 @@ Address = ${WG_SERVER_ADDRESS}
 ListenPort = ${WG_PORT}
 PostUp = iptables -A FORWARD -i ${WG_INTERFACE} -j ACCEPT; \
           iptables -A FORWARD -i ${WAN_INTERFACE} -o ${WG_INTERFACE} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
-          iptables -t nat -A POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE; \
-          ip6tables -A FORWARD -i ${WG_INTERFACE} -j ACCEPT; \
-          ip6tables -A FORWARD -i ${WAN_INTERFACE} -o ${WG_INTERFACE} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
-          ip6tables -t nat -A POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE
+          iptables -t nat -A POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE
 PostDown = iptables -D FORWARD -i ${WG_INTERFACE} -j ACCEPT; \
            iptables -D FORWARD -i ${WAN_INTERFACE} -o ${WG_INTERFACE} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
-           iptables -t nat -D POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE; \
-           ip6tables -D FORWARD -i ${WG_INTERFACE} -j ACCEPT; \
-           ip6tables -D FORWARD -i ${WAN_INTERFACE} -o ${WG_INTERFACE} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; \
-           ip6tables -t nat -D POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE
+           iptables -t nat -D POSTROUTING -o ${WAN_INTERFACE} -j MASQUERADE
 
 [Peer]
 PublicKey = ${CLIENT_PUBLIC_KEY}
@@ -195,50 +189,37 @@ bantime = 1h
 EOF
 fi
 
-echo_info "Enabling IP forwarding..."
+echo_info "Enabling IPv4 forwarding and disabling IPv6 (issue #8)..."
+# IPv6 is intentionally unsupported: disable it at the kernel so there is no
+# IPv6 stack to leak or blackhole traffic. Only IPv4 forwarding is enabled.
 cat > /etc/sysctl.d/99-wireguard.conf <<EOF
 net.ipv4.ip_forward = 1
-net.ipv6.conf.all.forwarding = 1
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
 EOF
 sysctl --system
 
 echo_info "Configuring firewall..."
 iptables -F
 iptables -X
-ip6tables -F
-ip6tables -X
 
 iptables -P INPUT DROP
 iptables -P FORWARD DROP
 iptables -P OUTPUT ACCEPT
-ip6tables -P INPUT DROP
-ip6tables -P FORWARD DROP
-ip6tables -P OUTPUT ACCEPT
 
 iptables -A INPUT -i lo -j ACCEPT
-ip6tables -A INPUT -i lo -j ACCEPT
 iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-ip6tables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 if [ "$ENABLE_SSH" = "true" ]; then
     iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-    ip6tables -A INPUT -p tcp --dport 22 -j ACCEPT
 fi
 iptables -A INPUT -p udp --dport "${WG_PORT}" -j ACCEPT
-ip6tables -A INPUT -p udp --dport "${WG_PORT}" -j ACCEPT
 # ICMP hardening (issue #10): do not accept ICMP echo from the Internet.
 # Keep ICMP types required for Path MTU Discovery so the tunnel stays healthy,
 # and only allow ping (echo-request) coming from the WireGuard tunnel interface.
 iptables -A INPUT -p icmp --icmp-type fragmentation-needed -j ACCEPT
 iptables -A INPUT -i "${WG_INTERFACE}" -p icmp --icmp-type echo-request -j ACCEPT
-# ICMPv6 is required for correct IPv6 operation (Neighbor Discovery, PMTUD).
-ip6tables -A INPUT -p icmpv6 --icmpv6-type packet-too-big -j ACCEPT
-ip6tables -A INPUT -p icmpv6 --icmpv6-type neighbour-solicitation -j ACCEPT
-ip6tables -A INPUT -p icmpv6 --icmpv6-type neighbour-advertisement -j ACCEPT
-ip6tables -A INPUT -p icmpv6 --icmpv6-type router-advertisement -j ACCEPT
-ip6tables -A INPUT -i "${WG_INTERFACE}" -p icmpv6 --icmpv6-type echo-request -j ACCEPT
 
 iptables-save > /etc/iptables/rules.v4
-ip6tables-save > /etc/iptables/rules.v6
 netfilter-persistent save
 systemctl enable netfilter-persistent
 if [ "$ENABLE_SSH" = "true" ]; then
