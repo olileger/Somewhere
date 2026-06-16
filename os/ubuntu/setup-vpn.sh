@@ -183,6 +183,55 @@ if [ "$ENABLE_SSH" = "true" ]; then
     systemctl enable --now ssh
 fi
 
+echo_info "Configuring automatic security updates (issue #4)..."
+apt-get install -y --no-install-recommends unattended-upgrades
+
+# unattended-upgrades only patches packages that are actually installed, so
+# OpenSSH CVEs are covered automatically when SSH is enabled (--debug) and the
+# package is simply absent (nothing to patch) otherwise.
+cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+
+# Apply security origins only and reboot automatically when a patch (e.g. a
+# kernel CVE) requires it, even while a VPN/SSH client is connected.
+cat > /etc/apt/apt.conf.d/52vpn-unattended-upgrades <<'EOF'
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+    "${distro_id}ESM:${distro_codename}-infra-security";
+};
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+Unattended-Upgrade::Automatic-Reboot-Time "now";
+EOF
+
+# Case 1 (VM up): the apt-daily timers run unattended-upgrade on schedule and
+# reboot if needed.
+systemctl enable unattended-upgrades
+systemctl enable apt-daily.timer apt-daily-upgrade.timer
+
+# Case 2 (VM was off): make patching the first priority on every boot. Refresh
+# the package index, apply pending security updates, then reboot in the same
+# run if the kernel/services require it.
+cat > /etc/systemd/system/vpn-boot-security-update.service <<'EOF'
+[Unit]
+Description=Apply pending security updates at boot (issue #4)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/bin/apt-get update
+ExecStart=/usr/bin/unattended-upgrade -v
+ExecStartPost=/bin/sh -c '[ -f /var/run/reboot-required ] && /sbin/reboot || true'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable vpn-boot-security-update.service
+
 echo_info "Configuring WireGuard to start on boot..."
 systemctl enable "wg-quick@${WG_INTERFACE}"
 
@@ -209,5 +258,7 @@ else
 fi
 echo "  - IP forwarding is enabled"
 echo "  - Firewall rules are persistent"
+echo "  - Automatic security updates are enabled (auto-reboot when required)"
+echo "  - Pending security updates are applied first at every boot"
 echo "  - WireGuard will start automatically on boot"
 echo "======================================================================"
