@@ -173,6 +173,10 @@ MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@op
 EOF
     chmod 644 /etc/ssh/sshd_config.d/99-hardening.conf
 
+    # sshd -t needs the privilege separation directory, normally created when
+    # the service starts; create it so validation works during provisioning
+    # before ssh has been started.
+    mkdir -p /run/sshd
     if ! sshd -t; then
         echo_error "sshd configuration is invalid after hardening."
     fi
